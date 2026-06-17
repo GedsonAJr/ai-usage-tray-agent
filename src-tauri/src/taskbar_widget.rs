@@ -17,7 +17,7 @@
 
 use core::ffi::c_void;
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
@@ -56,6 +56,8 @@ static STATE: OnceLock<Mutex<Vec<ProviderState>>> = OnceLock::new();
 static TASKBAR_HWND: AtomicIsize = AtomicIsize::new(0);
 static STARTED: AtomicBool = AtomicBool::new(false);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// Deslocamento horizontal (px): negativo move para a esquerda, positivo para a direita.
+static OFFSET: AtomicI32 = AtomicI32::new(0);
 
 fn state() -> &'static Mutex<Vec<ProviderState>> {
     STATE.get_or_init(|| {
@@ -100,6 +102,12 @@ pub fn start() {
         return;
     }
     thread::spawn(run_thread);
+}
+
+/// Define o deslocamento horizontal (px) dos widgets na barra. Negativo move
+/// para a esquerda, positivo para a direita (util para nao sobrepor toolbars).
+pub fn set_offset(px: i32) {
+    OFFSET.store(px, Ordering::Relaxed);
 }
 
 /// Atualiza um provedor (habilitado + linha de detalhe) e pede repintura.
@@ -354,7 +362,9 @@ unsafe fn position_widgets(taskbar: HWND) {
             boundary = left;
         }
     }
-    let mut x_right = boundary - gap_right;
+    // Deslocamento manual da config (negativo = esquerda, positivo = direita).
+    let offset = OFFSET.load(Ordering::Relaxed);
+    let mut x_right = boundary - gap_right + offset;
 
     // Posiciona da direita para a esquerda (o ultimo da lista fica mais a direita).
     for (index, hwnd, detail) in layout.iter().rev() {

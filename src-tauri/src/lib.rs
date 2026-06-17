@@ -40,6 +40,18 @@ struct AppConfig {
     intervalo_segundos: u64,
     loki: LokiConfig,
     providers: ProvidersConfig,
+    #[serde(default)]
+    barra_tarefas: TaskbarConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct TaskbarConfig {
+    /// Desloca o widget na barra de tarefas (px). Negativo = para a esquerda;
+    /// positivo = para a direita. Util para nao sobrepor toolbars/deskbands
+    /// (ex.: atalhos de pasta no Windows 10 -> use um valor negativo).
+    #[serde(default)]
+    deslocamento: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +221,7 @@ impl Default for AppConfig {
                     cookie: String::new(),
                 },
             },
+            barra_tarefas: TaskbarConfig::default(),
         }
     }
 }
@@ -1004,6 +1017,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
             tray.set_tooltip(Some(tooltip))?;
             if let Some(paths) = app.try_state::<RuntimePaths>() {
                 if let Ok(config) = load_or_create_config(paths.inner()) {
+                    taskbar_widget::set_offset(config.barra_tarefas.deslocamento);
                     taskbar_widget::set_provider(
                         "codex",
                         config.providers.codex.habilitado && snapshot.taskbar_codex,

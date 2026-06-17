@@ -62,6 +62,9 @@ Exemplo:
       "organizationId": "org_exemplo",
       "cookie": "sessionKey=..."
     }
+  },
+  "barraTarefas": {
+    "deslocamento": 0
   }
 }
 ```
@@ -149,6 +152,10 @@ Posicionamento:
 - Se houver outros widgets de terceiros embutidos na faixa direita da barra
   (monitores de rede, etc.), o widget detecta e se ancora à esquerda deles,
   para conviverem sem sobreposição.
+- Ajuste fino manual: `config.json` → `barraTarefas.deslocamento` (px). Negativo
+  move o widget para a esquerda, positivo para a direita. Útil quando há
+  *toolbars*/atalhos de pasta na barra (Windows 10) que não são detectados
+  automaticamente — use um valor negativo até liberar o espaço.
 
 Limitações:
 
