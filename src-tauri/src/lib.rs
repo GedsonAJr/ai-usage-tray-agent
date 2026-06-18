@@ -33,53 +33,142 @@ const APP_NAME_WINDOWS: &str = "AiUsageTrayAgent";
 #[cfg(target_os = "linux")]
 const APP_NAME_LINUX: &str = "ai-usage-tray-agent";
 
+// `default` no nivel do container faz com que qualquer campo ausente no JSON
+// seja preenchido com o valor de `Default` em vez de falhar a desserializacao.
+// Combinado com a normalizacao em `load_or_create_config`, isso garante que um
+// `config.json` antigo (sem campos novos) seja migrado e reescrito com os
+// padroes na inicializacao, sem perder os valores ja configurados.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct AppConfig {
     usuario: String,
     intervalo_segundos: u64,
     loki: LokiConfig,
     providers: ProvidersConfig,
-    #[serde(default)]
     barra_tarefas: TaskbarConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 struct TaskbarConfig {
+    /// Lado da barra onde o widget e' ancorado: "direita" (padrao) ou
+    /// "esquerda". O calculo que "adivinha" a posicao e' espelhado conforme o
+    /// lado; "esquerda" e' util quando o menu Iniciar esta centralizado (deixa a
+    /// ponta esquerda livre). O `deslocamento` continua valendo em ambos. Em
+    /// outros sistemas operacionais o campo e' ignorado (widget so existe no
+    /// Windows).
+    lado: String,
     /// Desloca o widget na barra de tarefas (px). Negativo = para a esquerda;
     /// positivo = para a direita. Util para nao sobrepor toolbars/deskbands
     /// (ex.: atalhos de pasta no Windows 10 -> use um valor negativo).
-    #[serde(default)]
     deslocamento: i32,
+    /// Tamanho da fonte em pontos (padrao 9). Limitado a 6..=24.
+    tamanho_fonte: u32,
+    /// Cor da fonte: "auto" (padrao, preto/branco conforme a cor da barra) ou um
+    /// hex "#RRGGBB" (ex.: "#FFD700"). Valores invalidos voltam a "auto".
+    cor_fonte: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+impl Default for TaskbarConfig {
+    fn default() -> Self {
+        Self {
+            lado: "direita".to_string(),
+            deslocamento: 0,
+            tamanho_fonte: 9,
+            cor_fonte: "auto".to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl TaskbarConfig {
+    /// `true` se o lado configurado e' a esquerda (aceita variacoes comuns).
+    fn lado_esquerdo(&self) -> bool {
+        matches!(
+            self.lado.trim().to_ascii_lowercase().as_str(),
+            "esquerda" | "esquerdo" | "left" | "e"
+        )
+    }
+
+    /// Tamanho da fonte em pontos, com limites sensatos (6..=24); 0/ausente -> 9.
+    fn tamanho_fonte_pt(&self) -> i32 {
+        let pt = self.tamanho_fonte as i32;
+        if pt <= 0 {
+            9
+        } else {
+            pt.clamp(6, 24)
+        }
+    }
+
+    /// Cor da fonte como `(r, g, b)`, ou `None` para automatico (preto/branco
+    /// conforme a cor real da barra). Aceita "#RRGGBB" ou "RRGGBB".
+    fn cor_fonte_rgb(&self) -> Option<(u8, u8, u8)> {
+        let texto = self.cor_fonte.trim().trim_start_matches('#');
+        if texto.is_empty() || texto.eq_ignore_ascii_case("auto") || texto.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(&texto[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&texto[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&texto[4..6], 16).ok()?;
+        Some((r, g, b))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 struct LokiConfig {
     url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 struct ProvidersConfig {
     codex: CodexConfig,
     claude: ClaudeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct CodexConfig {
     habilitado: bool,
+    /// Mostra este provider no widget da barra de tarefas (somente Windows).
+    /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
+    /// widget da barra so existe no Windows.
+    mostra_na_taskbar_windows: bool,
     auth_json_path: String,
 }
 
+impl Default for CodexConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: true,
+            mostra_na_taskbar_windows: true,
+            auth_json_path: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct ClaudeConfig {
     habilitado: bool,
+    /// Mostra este provider no widget da barra de tarefas (somente Windows).
+    /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
+    /// widget da barra so existe no Windows.
+    mostra_na_taskbar_windows: bool,
     organization_id: String,
     cookie: String,
+}
+
+impl Default for ClaudeConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: true,
+            mostra_na_taskbar_windows: true,
+            organization_id: String::new(),
+            cookie: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,10 +203,6 @@ struct RuntimeSnapshot {
     last_successful_send_at: Option<String>,
     codex_metric: Option<UsageMetric>,
     claude_metric: Option<UsageMetric>,
-    /// Mostrar o Codex na barra de tarefas (toggle do menu do tray).
-    taskbar_codex: bool,
-    /// Mostrar o Claude na barra de tarefas (toggle do menu do tray).
-    taskbar_claude: bool,
 }
 
 struct SharedState {
@@ -207,20 +292,8 @@ impl Default for AppConfig {
         Self {
             usuario: String::new(),
             intervalo_segundos: 10,
-            loki: LokiConfig {
-                url: String::new(),
-            },
-            providers: ProvidersConfig {
-                codex: CodexConfig {
-                    habilitado: true,
-                    auth_json_path: String::new(),
-                },
-                claude: ClaudeConfig {
-                    habilitado: true,
-                    organization_id: String::new(),
-                    cookie: String::new(),
-                },
-            },
+            loki: LokiConfig::default(),
+            providers: ProvidersConfig::default(),
             barra_tarefas: TaskbarConfig::default(),
         }
     }
@@ -239,18 +312,13 @@ pub fn run() {
             }
 
             let paths = ensure_storage()?;
-            let config = load_or_create_config(&paths)?;
-
-            // Por padrao, os providers habilitados na config ja vem visiveis na
-            // barra de tarefas (toggle do menu do tray).
-            let initial_snapshot = RuntimeSnapshot {
-                taskbar_codex: config.providers.codex.habilitado,
-                taskbar_claude: config.providers.claude.habilitado,
-                ..Default::default()
-            };
+            // Garante que o config.json exista e esteja normalizado (campos
+            // novos preenchidos com o padrao) ja na inicializacao. A preferencia
+            // de exibir na barra de tarefas e lida da config sob demanda.
+            load_or_create_config(&paths)?;
 
             let shared = Arc::new(SharedState {
-                snapshot: Mutex::new(initial_snapshot),
+                snapshot: Mutex::new(RuntimeSnapshot::default()),
                 cycle_lock: Mutex::new(()),
                 stop: AtomicBool::new(false),
             });
@@ -346,18 +414,28 @@ fn autostart_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
 }
 
-/// Flags `habilitado` dos providers lidas da config (para o estado dos toggles).
+/// Estado da barra de tarefas lido da config (fonte da verdade): por provider,
+/// se esta `habilitado` e se deve aparecer na barra (`mostraNaTaskbarWindows`).
 #[cfg(target_os = "windows")]
-fn config_habilitado<R: Runtime>(app: &AppHandle<R>) -> (bool, bool) {
+#[derive(Clone, Copy, Default)]
+struct TaskbarFlags {
+    codex_habilitado: bool,
+    codex_mostrar: bool,
+    claude_habilitado: bool,
+    claude_mostrar: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_flags<R: Runtime>(app: &AppHandle<R>) -> TaskbarFlags {
     app.try_state::<RuntimePaths>()
         .and_then(|paths| load_or_create_config(paths.inner()).ok())
-        .map(|config| {
-            (
-                config.providers.codex.habilitado,
-                config.providers.claude.habilitado,
-            )
+        .map(|config| TaskbarFlags {
+            codex_habilitado: config.providers.codex.habilitado,
+            codex_mostrar: config.providers.codex.mostra_na_taskbar_windows,
+            claude_habilitado: config.providers.claude.habilitado,
+            claude_mostrar: config.providers.claude.mostra_na_taskbar_windows,
         })
-        .unwrap_or((false, false))
+        .unwrap_or_default()
 }
 
 fn build_tray_menu<R: Runtime>(
@@ -419,9 +497,10 @@ fn build_tray_menu<R: Runtime>(
     ];
 
     // Toggles da barra de tarefas (recurso so do Windows). Cada IA habilitada na
-    // config vira um item com check; se desabilitada, aparece desabilitada.
+    // config vira um item com check; se desabilitada, aparece desabilitada. O
+    // estado marcado reflete `mostraNaTaskbarWindows` da config (fonte da verdade).
     #[cfg(target_os = "windows")]
-    let (codex_habilitado, claude_habilitado) = config_habilitado(app);
+    let flags = taskbar_flags(app);
 
     #[cfg(target_os = "windows")]
     let separator_taskbar = PredefinedMenuItem::separator(app)?;
@@ -438,8 +517,8 @@ fn build_tray_menu<R: Runtime>(
         app,
         "taskbar_codex",
         "Codex",
-        codex_habilitado,
-        codex_habilitado && snapshot.taskbar_codex,
+        flags.codex_habilitado,
+        flags.codex_habilitado && flags.codex_mostrar,
         None::<&str>,
     )?;
     #[cfg(target_os = "windows")]
@@ -447,8 +526,8 @@ fn build_tray_menu<R: Runtime>(
         app,
         "taskbar_claude",
         "Claude",
-        claude_habilitado,
-        claude_habilitado && snapshot.taskbar_claude,
+        flags.claude_habilitado,
+        flags.claude_habilitado && flags.claude_mostrar,
         None::<&str>,
     )?;
     #[cfg(target_os = "windows")]
@@ -494,9 +573,7 @@ fn update_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &RuntimeSnapshot) 
     let autostart_on = autostart_enabled(app);
 
     #[cfg(target_os = "windows")]
-    let (codex_habilitado, claude_habilitado) = config_habilitado(app);
-    #[cfg(target_os = "windows")]
-    let (show_codex, show_claude) = (snapshot.taskbar_codex, snapshot.taskbar_claude);
+    let flags = taskbar_flags(app);
 
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
@@ -511,14 +588,14 @@ fn update_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &RuntimeSnapshot) 
 
         #[cfg(target_os = "windows")]
         {
-            let _ = items.taskbar_codex.set_enabled(codex_habilitado);
+            let _ = items.taskbar_codex.set_enabled(flags.codex_habilitado);
             let _ = items
                 .taskbar_codex
-                .set_checked(codex_habilitado && show_codex);
-            let _ = items.taskbar_claude.set_enabled(claude_habilitado);
+                .set_checked(flags.codex_habilitado && flags.codex_mostrar);
+            let _ = items.taskbar_claude.set_enabled(flags.claude_habilitado);
             let _ = items
                 .taskbar_claude
-                .set_checked(claude_habilitado && show_claude);
+                .set_checked(flags.claude_habilitado && flags.claude_mostrar);
         }
     });
 }
@@ -595,17 +672,39 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
     }
 }
 
-/// Alterna a exibicao de um provider na barra de tarefas e atualiza o tray.
+/// Alterna a exibicao de um provider na barra de tarefas, persistindo a
+/// preferencia no `config.json` (fonte da verdade) e atualizando o tray.
 fn toggle_taskbar_provider<R: Runtime>(app: &AppHandle<R>, provider: &str) {
-    if let Some(shared) = app.try_state::<Arc<SharedState>>() {
-        {
-            let mut snapshot = shared.snapshot.lock().unwrap();
-            match provider {
-                "codex" => snapshot.taskbar_codex = !snapshot.taskbar_codex,
-                "claude" => snapshot.taskbar_claude = !snapshot.taskbar_claude,
-                _ => {}
-            }
+    let Some(paths) = app.try_state::<RuntimePaths>() else {
+        return;
+    };
+
+    let mut config = match load_or_create_config(paths.inner()) {
+        Ok(config) => config,
+        Err(error) => {
+            handle_runtime_error(app, &format!("Falha ao ler config: {error}"));
+            return;
         }
+    };
+
+    match provider {
+        "codex" => {
+            config.providers.codex.mostra_na_taskbar_windows =
+                !config.providers.codex.mostra_na_taskbar_windows
+        }
+        "claude" => {
+            config.providers.claude.mostra_na_taskbar_windows =
+                !config.providers.claude.mostra_na_taskbar_windows
+        }
+        _ => return,
+    }
+
+    if let Err(error) = write_config(paths.inner(), &config) {
+        handle_runtime_error(app, &format!("Falha ao salvar preferencia da barra: {error}"));
+        return;
+    }
+
+    if let Some(shared) = app.try_state::<Arc<SharedState>>() {
         let _ = refresh_tray(app, &shared);
     }
 }
@@ -1018,14 +1117,19 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
             if let Some(paths) = app.try_state::<RuntimePaths>() {
                 if let Ok(config) = load_or_create_config(paths.inner()) {
                     taskbar_widget::set_offset(config.barra_tarefas.deslocamento);
+                    taskbar_widget::set_side(config.barra_tarefas.lado_esquerdo());
+                    taskbar_widget::set_font_size(config.barra_tarefas.tamanho_fonte_pt());
+                    taskbar_widget::set_font_color(config.barra_tarefas.cor_fonte_rgb());
                     taskbar_widget::set_provider(
                         "codex",
-                        config.providers.codex.habilitado && snapshot.taskbar_codex,
+                        config.providers.codex.habilitado
+                            && config.providers.codex.mostra_na_taskbar_windows,
                         widget_detail(snapshot.codex_metric.as_ref()),
                     );
                     taskbar_widget::set_provider(
                         "claude",
-                        config.providers.claude.habilitado && snapshot.taskbar_claude,
+                        config.providers.claude.habilitado
+                            && config.providers.claude.mostra_na_taskbar_windows,
                         widget_detail(snapshot.claude_metric.as_ref()),
                     );
                 }
@@ -1241,15 +1345,35 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
 fn load_or_create_config(paths: &RuntimePaths) -> Result<AppConfig, Box<dyn std::error::Error>> {
     if !paths.config_file.exists() {
         let default_config = AppConfig::default();
-        let payload = serde_json::to_string_pretty(&default_config)?;
-        fs::write(&paths.config_file, format!("{payload}\n"))?;
+        write_config(paths, &default_config)?;
         return Ok(default_config);
     }
 
     let content = fs::read_to_string(&paths.config_file)?;
+    // Campos ausentes sao preenchidos com os padroes (containers com
+    // `#[serde(default)]`), preservando os valores ja existentes no arquivo.
     let mut config: AppConfig = serde_json::from_str(&content)?;
     config.intervalo_segundos = config.intervalo_segundos.clamp(5, 3600);
+
+    // Normaliza o arquivo: se algo estava faltando (ou fora do clamp), regrava
+    // com a estrutura completa. A comparacao e feita sobre `Value` para ignorar
+    // diferencas de formatacao/ordem e so reescrever quando houver mudanca real.
+    let original: Value = serde_json::from_str(&content)?;
+    let canonical: Value = serde_json::to_value(&config)?;
+    if original != canonical {
+        write_config(paths, &config)?;
+    }
+
     Ok(config)
+}
+
+fn write_config(
+    paths: &RuntimePaths,
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = serde_json::to_string_pretty(config)?;
+    fs::write(&paths.config_file, format!("{payload}\n"))?;
+    Ok(())
 }
 
 fn append_log_line(

@@ -55,16 +55,21 @@ Exemplo:
   "providers": {
     "codex": {
       "habilitado": true,
+      "mostraNaTaskbarWindows": true,
       "authJsonPath": "C:\\Users\\usuario\\.codex\\auth.json"
     },
     "claude": {
       "habilitado": true,
+      "mostraNaTaskbarWindows": true,
       "organizationId": "org_exemplo",
       "cookie": "sessionKey=..."
     }
   },
   "barraTarefas": {
-    "deslocamento": 0
+    "lado": "direita",
+    "deslocamento": 0,
+    "tamanhoFonte": 9,
+    "corFonte": "auto"
   }
 }
 ```
@@ -102,9 +107,11 @@ O timestamp do Loki é enviado em nanossegundos no campo `values`.
 - Enviar agora
 - Pausar/retomar coleta
 - **Mostrar na barra de tarefas** (somente Windows): um item com check por IA
-  (`Codex` e `Claude`) para ligar/desligar a exibição na barra. Cada IA vem
-  marcada conforme está habilitada na `config.json`; se estiver
-  `"habilitado": false`, o item aparece desabilitado (esmaecido).
+  (`Codex` e `Claude`) para ligar/desligar a exibição na barra. O estado de cada
+  item reflete o campo `mostraNaTaskbarWindows` da `config.json` (que é a fonte
+  da verdade) e a alteração é **salva no arquivo**, então a escolha persiste
+  entre reinícios. Se a IA estiver `"habilitado": false`, o item aparece
+  desabilitado (esmaecido) e nunca é exibido na barra.
 - **Iniciar com o Windows**: item com check para ligar/desligar a inicialização
   automática com o sistema.
 - Sair
@@ -133,6 +140,14 @@ No Windows o app desenha o uso diretamente na barra de tarefas. Cada provedor
 - O primeiro valor é o uso da janela de 5h e quanto falta para resetar.
 - O segundo valor é o uso dos últimos 7 dias e quanto falta para resetar.
 - Provedores com `"habilitado": false` no `config.json` não aparecem na barra.
+- A exibição de cada provedor na barra é controlada por
+  `providers.<ia>.mostraNaTaskbarWindows` (padrão `true`). Você pode editar esse
+  valor direto no `config.json` (vale no próximo ciclo) ou pelo item **Mostrar na
+  barra de tarefas** do menu do tray (salva na hora). Só aparece na barra quando
+  `habilitado` **e** `mostraNaTaskbarWindows` forem `true`.
+- Em Linux/macOS o campo `mostraNaTaskbarWindows` é lido mas **ignorado**: o
+  widget da barra de tarefas só existe no Windows. O campo é mantido no arquivo
+  para que a mesma `config.json` seja portável entre sistemas.
 
 Como funciona:
 
@@ -148,14 +163,33 @@ Como funciona:
 
 Posicionamento:
 
-- O widget fica à esquerda da área de notificação (bandeja).
-- Se houver outros widgets de terceiros embutidos na faixa direita da barra
-  (monitores de rede, etc.), o widget detecta e se ancora à esquerda deles,
+- O lado é controlado por `config.json` → `barraTarefas.lado`: `"direita"`
+  (padrão) ou `"esquerda"`. O cálculo que "adivinha" a posição é espelhado
+  conforme o lado.
+- **Direita** (padrão): o widget fica à esquerda da área de notificação
+  (bandeja). Se houver outros widgets de terceiros embutidos na faixa direita da
+  barra (monitores de rede, etc.), ele detecta e se ancora à esquerda deles,
   para conviverem sem sobreposição.
+- **Esquerda**: o widget fica na ponta esquerda da barra, ancorado à direita de
+  eventuais widgets ali (ex.: botão de Widgets/clima). É útil com o menu Iniciar
+  **centralizado**, que deixa a ponta esquerda livre. Não é recomendado com a
+  barra alinhada à esquerda (Iniciar/apps na esquerda), pois o espaço já está
+  ocupado — nesse caso use o lado direito.
 - Ajuste fino manual: `config.json` → `barraTarefas.deslocamento` (px). Negativo
-  move o widget para a esquerda, positivo para a direita. Útil quando há
-  *toolbars*/atalhos de pasta na barra (Windows 10) que não são detectados
-  automaticamente — use um valor negativo até liberar o espaço.
+  move o widget para a esquerda, positivo para a direita, **em ambos os lados**.
+  Útil quando há *toolbars*/atalhos de pasta na barra (Windows 10) que não são
+  detectados automaticamente — ajuste até liberar o espaço.
+
+Aparência (fonte):
+
+- `barraTarefas.tamanhoFonte` (pontos, padrão `9`, limitado a 6–24): tamanho da
+  fonte do texto na barra.
+- `barraTarefas.corFonte`: `"auto"` (padrão — preto em barra clara, branco em
+  barra escura, conforme a cor real da barra) ou um hex `"#RRGGBB"` (ex.:
+  `"#FFD700"`). Valores inválidos voltam para `"auto"`.
+- Ambos são aplicados no próximo ciclo (~1s) ao editar o `config.json`, sem
+  reiniciar. Evite uma `corFonte` igual à cor da barra (o fundo é transparente
+  por *color-key*, então o texto sumiria).
 
 Limitações:
 

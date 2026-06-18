@@ -35,8 +35,8 @@ const CLASS_NAME: PCWSTR = w!("AiUsageTaskbarWidget");
 const TIMER_ID: usize = 1;
 const WM_APP_UPDATE: u32 = WM_APP + 1;
 
-/// Tamanho da fonte em pontos (Segoe UI, regular).
-const FONT_POINT_SIZE: i32 = 9;
+/// Tamanho padrao da fonte em pontos (Segoe UI, regular).
+const FONT_POINT_DEFAULT: i32 = 9;
 
 /// Provedores exibidos, na ordem da esquerda para a direita.
 const SLOTS: [(&str, &str); 2] = [("codex", "Codex"), ("claude", "Claude")];
@@ -58,6 +58,15 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 static CLASS_REGISTERED: AtomicBool = AtomicBool::new(false);
 /// Deslocamento horizontal (px): negativo move para a esquerda, positivo para a direita.
 static OFFSET: AtomicI32 = AtomicI32::new(0);
+/// Lado da barra onde os widgets sao ancorados: `false` = direita (padrao),
+/// `true` = esquerda (util com o menu Iniciar centralizado, deixando a ponta
+/// esquerda livre). O calculo de "adivinhar" a posicao e' espelhado.
+static SIDE_LEFT: AtomicBool = AtomicBool::new(false);
+/// Tamanho da fonte em pontos (configuravel via `barraTarefas.tamanhoFonte`).
+static FONT_POINT: AtomicI32 = AtomicI32::new(FONT_POINT_DEFAULT);
+/// Cor da fonte como COLORREF (0x00BBGGRR) ou -1 = automatico (preto/branco
+/// conforme a cor real da barra). Configuravel via `barraTarefas.corFonte`.
+static FONT_COLOR: AtomicI32 = AtomicI32::new(-1);
 
 fn state() -> &'static Mutex<Vec<ProviderState>> {
     STATE.get_or_init(|| {
@@ -81,10 +90,14 @@ thread_local! {
     static FONT_CACHE: RefCell<Option<(i32, HFONT)>> = const { RefCell::new(None) };
     /// Cor de fundo/color-key amostrada da barra, por provedor (CLR_INVALID = ainda nao amostrada).
     static KEY_COLORS: RefCell<[u32; SLOT_COUNT]> = const { RefCell::new([CLR_INVALID; SLOT_COUNT]) };
-    /// Ultima borda esquerda conhecida de um widget vizinho (-1 = nenhuma).
+    /// Ultima borda conhecida de um widget vizinho (-1 = nenhuma). Para o lado
+    /// direito guarda a borda esquerda do vizinho; para o esquerdo, a direita.
     static STICKY_STRIP: Cell<i32> = const { Cell::new(-1) };
     /// Quantos ticks seguidos o vizinho nao foi detectado.
     static STRIP_MISSING: Cell<i32> = const { Cell::new(0) };
+    /// Ultimo lado configurado observado (-1 = nenhum), para resetar o sticky
+    /// quando o lado muda (as bordas guardadas tem semantica diferente por lado).
+    static LAST_SIDE: Cell<i32> = const { Cell::new(-1) };
 }
 
 /// Ticks (~segundos) que mantemos a ultima posicao do vizinho quando ele some
@@ -108,6 +121,38 @@ pub fn start() {
 /// para a esquerda, positivo para a direita (util para nao sobrepor toolbars).
 pub fn set_offset(px: i32) {
     OFFSET.store(px, Ordering::Relaxed);
+}
+
+/// Define o lado da barra onde os widgets ficam: `true` = esquerda, `false` =
+/// direita (padrao). A deteccao da posicao e' espelhada conforme o lado.
+pub fn set_side(left: bool) {
+    SIDE_LEFT.store(left, Ordering::Relaxed);
+}
+
+/// Define o tamanho da fonte em pontos. A fonte e o layout sao recalculados no
+/// proximo ciclo (a cache de fonte e' por altura em pixels).
+pub fn set_font_size(pt: i32) {
+    FONT_POINT.store(pt.max(1), Ordering::Relaxed);
+}
+
+/// Define a cor da fonte. `Some((r, g, b))` fixa a cor; `None` volta ao modo
+/// automatico (preto/branco conforme a cor real da barra).
+pub fn set_font_color(rgb: Option<(u8, u8, u8)>) {
+    let value = match rgb {
+        Some((r, g, b)) => (r as i32) | ((g as i32) << 8) | ((b as i32) << 16),
+        None => -1,
+    };
+    FONT_COLOR.store(value, Ordering::Relaxed);
+}
+
+/// Cor da fonte configurada, ou `None` se estiver em modo automatico.
+fn font_color_override() -> Option<COLORREF> {
+    let value = FONT_COLOR.load(Ordering::Relaxed);
+    if value < 0 {
+        None
+    } else {
+        Some(COLORREF(value as u32))
+    }
 }
 
 /// Atualiza um provedor (habilitado + linha de detalhe) e pede repintura.
@@ -284,8 +329,42 @@ unsafe fn create_widget(taskbar: HWND, index: usize) -> Option<HWND> {
     Some(hwnd)
 }
 
-/// Posiciona os widgets habilitados, encostados a direita (a esquerda da bandeja
-/// ou de outros widgets embutidos na barra), empilhados horizontalmente.
+/// Aplica a logica de "carencia" (sticky) ao limite detectado do vizinho: se ele
+/// sumiu temporariamente da deteccao (ex.: painel de config. rapidas aberto),
+/// mantem a ultima posicao por `STRIP_GRACE_TICKS` ticks. Reseta o estado quando
+/// o lado configurado muda, pois a borda guardada tem semantica diferente.
+fn sticky_boundary(detected: Option<i32>, side_left: bool) -> Option<i32> {
+    let side = side_left as i32;
+    if LAST_SIDE.get() != side {
+        LAST_SIDE.set(side);
+        STICKY_STRIP.set(-1);
+        STRIP_MISSING.set(0);
+    }
+    match detected {
+        Some(value) => {
+            STICKY_STRIP.set(value);
+            STRIP_MISSING.set(0);
+            Some(value)
+        }
+        None => {
+            let missing = STRIP_MISSING.get() + 1;
+            STRIP_MISSING.set(missing);
+            let last = STICKY_STRIP.get();
+            if last >= 0 && missing < STRIP_GRACE_TICKS {
+                Some(last)
+            } else {
+                STICKY_STRIP.set(-1);
+                None
+            }
+        }
+    }
+}
+
+/// Posiciona os widgets habilitados, empilhados horizontalmente. Por padrao
+/// ancora a direita (a esquerda da bandeja ou de outros widgets embutidos na
+/// faixa direita). Com `lado = "esquerda"` ancora a esquerda (a direita de
+/// eventuais widgets na ponta esquerda), util com o menu Iniciar centralizado.
+/// O `deslocamento` (negativo = esquerda, positivo = direita) vale nos dois.
 unsafe fn position_widgets(taskbar: HWND) {
     let dpi = {
         let value = GetDpiForWindow(taskbar);
@@ -321,65 +400,76 @@ unsafe fn position_widgets(taskbar: HWND) {
     }
 
     let font = get_font(dpi);
-    let gap_right = (3.0 * scale) as i32; // gap ate o vizinho da direita
+    let gap = (3.0 * scale) as i32; // gap ate o vizinho
     let between = (6.0 * scale) as i32; // gap entre widgets
+    let offset = OFFSET.load(Ordering::Relaxed);
+    let side_left = SIDE_LEFT.load(Ordering::Relaxed);
 
-    // Borda direita: a esquerda da bandeja e, se houver, de qualquer outro
-    // widget de terceiro embutido na faixa direita da barra.
-    let tray_left = FindWindowExW(Some(taskbar), None, w!("TrayNotifyWnd"), PCWSTR::null())
-        .ok()
-        .and_then(|tray| window_left_in_client(taskbar, tray));
-    let strip_left = leftmost_strip_widget(taskbar, taskbar_rect.right, scale);
+    // Calcula (x, largura) de cada widget conforme o lado.
+    let mut placements: Vec<(usize, isize, i32, i32)> = Vec::with_capacity(layout.len());
 
-    // "Sticky": se o vizinho sumiu da deteccao (ex.: painel de config. rapidas
-    // aberto), seguramos a ultima posicao conhecida por um tempo de carencia,
-    // para o widget nao avancar e sobrepor o vizinho que ainda esta la.
-    let effective_strip = match strip_left {
-        Some(left) => {
-            STICKY_STRIP.set(left);
-            STRIP_MISSING.set(0);
-            Some(left)
-        }
-        None => {
-            let missing = STRIP_MISSING.get() + 1;
-            STRIP_MISSING.set(missing);
-            let last = STICKY_STRIP.get();
-            if last >= 0 && missing < STRIP_GRACE_TICKS {
-                Some(last)
-            } else {
-                STICKY_STRIP.set(-1);
-                None
+    if side_left {
+        // Borda esquerda: a direita de eventuais widgets de terceiro na ponta
+        // esquerda da barra; senao, a propria borda esquerda (cliente x = 0).
+        let strip = sticky_boundary(
+            rightmost_strip_widget(taskbar, taskbar_rect.right, scale),
+            true,
+        );
+        let mut boundary = taskbar_rect.left;
+        if let Some(right) = strip {
+            if right > boundary {
+                boundary = right;
             }
         }
-    };
+        let mut x_left = boundary + gap + offset;
+        // Posiciona da esquerda para a direita (o primeiro da lista fica mais a esquerda).
+        for (index, hwnd, detail) in layout.iter() {
+            let label = SLOTS[*index].1;
+            let width = measure_text(label, font, scale).max(measure_text(detail, font, scale));
+            let x = x_left.max(0);
+            placements.push((*index, *hwnd, x, width));
+            x_left = x + width + between;
+        }
+    } else {
+        // Borda direita: a esquerda da bandeja e, se houver, de qualquer outro
+        // widget de terceiro embutido na faixa direita da barra.
+        let tray_left = FindWindowExW(Some(taskbar), None, w!("TrayNotifyWnd"), PCWSTR::null())
+            .ok()
+            .and_then(|tray| window_left_in_client(taskbar, tray));
+        let strip = sticky_boundary(
+            leftmost_strip_widget(taskbar, taskbar_rect.right, scale),
+            false,
+        );
 
-    let mut boundary = taskbar_rect.right;
-    if let Some(left) = tray_left {
-        boundary = left;
-    }
-    if let Some(left) = effective_strip {
-        if left > 0 && left < boundary {
+        let mut boundary = taskbar_rect.right;
+        if let Some(left) = tray_left {
             boundary = left;
         }
+        if let Some(left) = strip {
+            if left > 0 && left < boundary {
+                boundary = left;
+            }
+        }
+        let mut x_right = boundary - gap + offset;
+        // Posiciona da direita para a esquerda (o ultimo da lista fica mais a direita).
+        for (index, hwnd, detail) in layout.iter().rev() {
+            let label = SLOTS[*index].1;
+            let width = measure_text(label, font, scale).max(measure_text(detail, font, scale));
+            let x = (x_right - width).max(0);
+            placements.push((*index, *hwnd, x, width));
+            x_right = x - between;
+        }
     }
-    // Deslocamento manual da config (negativo = esquerda, positivo = direita).
-    let offset = OFFSET.load(Ordering::Relaxed);
-    let mut x_right = boundary - gap_right + offset;
 
-    // Posiciona da direita para a esquerda (o ultimo da lista fica mais a direita).
-    for (index, hwnd, detail) in layout.iter().rev() {
-        let label = SLOTS[*index].1;
-        let width = measure_text(label, font, scale).max(measure_text(detail, font, scale));
-        let x = (x_right - width).max(0);
-        let widget = HWND(*hwnd as *mut c_void);
-        // Amostra a cor real da barra atras do widget e usa como fundo/color-key,
-        // para o ClearType misturar contra a cor verdadeira (sem halo cinza).
+    // Aplica posicao + cor de fundo (color-key) amostrada da barra atras de cada
+    // widget, para o ClearType misturar contra a cor verdadeira (sem halo cinza).
+    for (index, hwnd, x, width) in placements {
+        let widget = HWND(hwnd as *mut c_void);
         let bar = sample_bar_color(widget).unwrap_or_else(|| compute_colors().1);
-        KEY_COLORS.with(|cache| cache.borrow_mut()[*index] = bar.0);
+        KEY_COLORS.with(|cache| cache.borrow_mut()[index] = bar.0);
         let _ = SetLayeredWindowAttributes(widget, bar, 0, LWA_COLORKEY);
         let _ = SetWindowPos(widget, Some(HWND_TOP), x, 0, width, height, SWP_NOACTIVATE);
         let _ = InvalidateRect(Some(widget), None, true);
-        x_right = x - between;
     }
 }
 
@@ -421,8 +511,15 @@ unsafe fn window_left_in_client(taskbar: HWND, window: HWND) -> Option<i32> {
 struct StripScan {
     taskbar: isize,
     width_limit: i32,
-    left_threshold: i32,
-    min_left: i32,
+    /// `true` = faixa esquerda (rastreia a maior borda direita encontrada);
+    /// `false` = faixa direita (rastreia a menor borda esquerda encontrada).
+    left_strip: bool,
+    /// Limite da regiao (cliente). Direita: ignora janelas com `left <= limite`.
+    /// Esquerda: ignora janelas com `right >= limite`.
+    region_limit: i32,
+    /// Melhor borda encontrada. Direita: menor `left` (inicia em `i32::MAX`).
+    /// Esquerda: maior `right` (inicia em `i32::MIN`).
+    best: i32,
 }
 
 /// True se o nome da classe e' o de um dos nossos proprios widgets.
@@ -436,7 +533,7 @@ unsafe extern "system" fn strip_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if !IsWindowVisible(hwnd).as_bool() {
         return BOOL(1);
     }
-    // Ignora nossas proprias janelas (senao ancorariamos a esquerda de nos mesmos).
+    // Ignora nossas proprias janelas (senao ancorariamos ao lado de nos mesmos).
     let mut class_buffer = [0u16; 64];
     let class_len = GetClassNameW(hwnd, &mut class_buffer);
     if class_len > 0 && is_our_widget_class(&class_buffer[..class_len as usize]) {
@@ -450,16 +547,22 @@ unsafe extern "system" fn strip_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if width <= 0 || width > context.width_limit {
         return BOOL(1);
     }
-    // So considera janelas estreitas posicionadas na faixa direita da barra,
-    // o que exclui os containers largos do sistema (area de tarefas, etc.).
+    // So considera janelas estreitas na faixa de interesse, o que exclui os
+    // containers largos do sistema (area de tarefas, lista centralizada, etc.).
     let taskbar = HWND(context.taskbar as *mut c_void);
     let mut point = POINT {
         x: rect.left,
         y: rect.top,
     };
     let _ = ScreenToClient(taskbar, &mut point);
-    if point.x > context.left_threshold && point.x < context.min_left {
-        context.min_left = point.x;
+    if context.left_strip {
+        // Borda direita da janela em coordenadas de cliente.
+        let right = point.x + width;
+        if right < context.region_limit && right > context.best {
+            context.best = right;
+        }
+    } else if point.x > context.region_limit && point.x < context.best {
+        context.best = point.x;
     }
     BOOL(1)
 }
@@ -470,18 +573,43 @@ unsafe fn leftmost_strip_widget(taskbar: HWND, taskbar_width: i32, scale: f32) -
     let mut context = StripScan {
         taskbar: taskbar.0 as isize,
         width_limit: (500.0 * scale) as i32,
-        left_threshold: (taskbar_width as f32 * 0.35) as i32,
-        min_left: i32::MAX,
+        left_strip: false,
+        region_limit: (taskbar_width as f32 * 0.35) as i32,
+        best: i32::MAX,
     };
     let _ = EnumChildWindows(
         Some(taskbar),
         Some(strip_scan_proc),
         LPARAM(&mut context as *mut StripScan as isize),
     );
-    if context.min_left == i32::MAX {
+    if context.best == i32::MAX {
         None
     } else {
-        Some(context.min_left)
+        Some(context.best)
+    }
+}
+
+/// Borda direita (em coordenadas de cliente) do widget de terceiro mais a direita
+/// embutido na ponta esquerda da barra (ex.: botao de Widgets/clima), ou `None`.
+/// So considera a faixa esquerda (ate ~40% da largura) para nao ancorar nos
+/// icones centralizados do menu Iniciar.
+unsafe fn rightmost_strip_widget(taskbar: HWND, taskbar_width: i32, scale: f32) -> Option<i32> {
+    let mut context = StripScan {
+        taskbar: taskbar.0 as isize,
+        width_limit: (500.0 * scale) as i32,
+        left_strip: true,
+        region_limit: (taskbar_width as f32 * 0.40) as i32,
+        best: i32::MIN,
+    };
+    let _ = EnumChildWindows(
+        Some(taskbar),
+        Some(strip_scan_proc),
+        LPARAM(&mut context as *mut StripScan as isize),
+    );
+    if context.best == i32::MIN {
+        None
+    } else {
+        Some(context.best)
     }
 }
 
@@ -529,7 +657,8 @@ fn luminance(color: COLORREF) -> f32 {
 
 /// Converte o tamanho em pontos para pixels conforme o DPI (pt * dpi / 72).
 fn font_pixel_height(dpi: u32) -> i32 {
-    ((FONT_POINT_SIZE * dpi as i32) + 36) / 72
+    let pt = FONT_POINT.load(Ordering::Relaxed);
+    ((pt * dpi as i32) + 36) / 72
 }
 
 fn get_font(dpi: u32) -> HFONT {
@@ -617,11 +746,16 @@ unsafe fn paint(hwnd: HWND) {
                 COLORREF(stored)
             }
         };
-        let text = if luminance(key) > 0.5 {
-            rgb(0, 0, 0)
-        } else {
-            rgb(255, 255, 255)
-        };
+        // Cor da fonte: a configurada, ou automatica (preto em barra clara,
+        // branco em barra escura). O ClearType mistura contra `key` (cor real da
+        // barra), entao a cor escolhida fica nitida.
+        let text = font_color_override().unwrap_or_else(|| {
+            if luminance(key) > 0.5 {
+                rgb(0, 0, 0)
+            } else {
+                rgb(255, 255, 255)
+            }
+        });
         let brush = CreateSolidBrush(key);
         let full = RECT {
             left: 0,
