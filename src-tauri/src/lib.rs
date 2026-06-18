@@ -14,56 +14,161 @@ use std::{
 
 mod usage_dashboard;
 
+#[cfg(target_os = "windows")]
+mod taskbar_widget;
+
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 const TRAY_ID: &str = "main-tray";
 const APP_NAME_WINDOWS: &str = "AiUsageTrayAgent";
 #[cfg(target_os = "linux")]
 const APP_NAME_LINUX: &str = "ai-usage-tray-agent";
 
+// `default` no nivel do container faz com que qualquer campo ausente no JSON
+// seja preenchido com o valor de `Default` em vez de falhar a desserializacao.
+// Combinado com a normalizacao em `load_or_create_config`, isso garante que um
+// `config.json` antigo (sem campos novos) seja migrado e reescrito com os
+// padroes na inicializacao, sem perder os valores ja configurados.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct AppConfig {
     usuario: String,
     intervalo_segundos: u64,
     loki: LokiConfig,
     providers: ProvidersConfig,
+    barra_tarefas: TaskbarConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
+struct TaskbarConfig {
+    /// Lado da barra onde o widget e' ancorado: "direita" (padrao) ou
+    /// "esquerda". O calculo que "adivinha" a posicao e' espelhado conforme o
+    /// lado; "esquerda" e' util quando o menu Iniciar esta centralizado (deixa a
+    /// ponta esquerda livre). O `deslocamento` continua valendo em ambos. Em
+    /// outros sistemas operacionais o campo e' ignorado (widget so existe no
+    /// Windows).
+    lado: String,
+    /// Desloca o widget na barra de tarefas (px). Negativo = para a esquerda;
+    /// positivo = para a direita. Util para nao sobrepor toolbars/deskbands
+    /// (ex.: atalhos de pasta no Windows 10 -> use um valor negativo).
+    deslocamento: i32,
+    /// Tamanho da fonte em pontos (padrao 9). Limitado a 6..=24.
+    tamanho_fonte: u32,
+    /// Cor da fonte: "auto" (padrao, preto/branco conforme a cor da barra) ou um
+    /// hex "#RRGGBB" (ex.: "#FFD700"). Valores invalidos voltam a "auto".
+    cor_fonte: String,
+}
+
+impl Default for TaskbarConfig {
+    fn default() -> Self {
+        Self {
+            lado: "direita".to_string(),
+            deslocamento: 0,
+            tamanho_fonte: 9,
+            cor_fonte: "auto".to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl TaskbarConfig {
+    /// `true` se o lado configurado e' a esquerda (aceita variacoes comuns).
+    fn lado_esquerdo(&self) -> bool {
+        matches!(
+            self.lado.trim().to_ascii_lowercase().as_str(),
+            "esquerda" | "esquerdo" | "left" | "e"
+        )
+    }
+
+    /// Tamanho da fonte em pontos, com limites sensatos (6..=24); 0/ausente -> 9.
+    fn tamanho_fonte_pt(&self) -> i32 {
+        let pt = self.tamanho_fonte as i32;
+        if pt <= 0 {
+            9
+        } else {
+            pt.clamp(6, 24)
+        }
+    }
+
+    /// Cor da fonte como `(r, g, b)`, ou `None` para automatico (preto/branco
+    /// conforme a cor real da barra). Aceita "#RRGGBB" ou "RRGGBB".
+    fn cor_fonte_rgb(&self) -> Option<(u8, u8, u8)> {
+        let texto = self.cor_fonte.trim().trim_start_matches('#');
+        if texto.is_empty() || texto.eq_ignore_ascii_case("auto") || texto.len() != 6 {
+            return None;
+        }
+        let r = u8::from_str_radix(&texto[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&texto[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&texto[4..6], 16).ok()?;
+        Some((r, g, b))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 struct LokiConfig {
     url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 struct ProvidersConfig {
     codex: CodexConfig,
     claude: ClaudeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct CodexConfig {
     habilitado: bool,
+    /// Mostra este provider no widget da barra de tarefas (somente Windows).
+    /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
+    /// widget da barra so existe no Windows.
+    mostra_na_taskbar_windows: bool,
     auth_json_path: String,
 }
 
+impl Default for CodexConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: true,
+            mostra_na_taskbar_windows: true,
+            auth_json_path: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct ClaudeConfig {
     habilitado: bool,
+    /// Mostra este provider no widget da barra de tarefas (somente Windows).
+    /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
+    /// widget da barra so existe no Windows.
+    mostra_na_taskbar_windows: bool,
     organization_id: String,
     cookie: String,
+}
+
+impl Default for ClaudeConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: true,
+            mostra_na_taskbar_windows: true,
+            organization_id: String::new(),
+            cookie: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +209,21 @@ struct SharedState {
     snapshot: Mutex<RuntimeSnapshot>,
     cycle_lock: Mutex<()>,
     stop: AtomicBool,
+}
+
+/// Handles dos itens dinamicos do menu do tray, para atualiza-los no lugar
+/// (set_text/set_checked/set_enabled) em vez de reconstruir o menu — assim o
+/// menu nao fecha sozinho quando atualizamos a cada ciclo de coleta.
+struct TrayMenuItems<R: Runtime> {
+    status: MenuItem<R>,
+    codex_status: MenuItem<R>,
+    claude_status: MenuItem<R>,
+    toggle_pause: MenuItem<R>,
+    autostart: CheckMenuItem<R>,
+    #[cfg(target_os = "windows")]
+    taskbar_codex: CheckMenuItem<R>,
+    #[cfg(target_os = "windows")]
+    taskbar_claude: CheckMenuItem<R>,
 }
 
 /// Porta efêmera do servidor HTTP do dashboard de uso (0 = indisponível).
@@ -172,20 +292,9 @@ impl Default for AppConfig {
         Self {
             usuario: String::new(),
             intervalo_segundos: 10,
-            loki: LokiConfig {
-                url: String::new(),
-            },
-            providers: ProvidersConfig {
-                codex: CodexConfig {
-                    habilitado: true,
-                    auth_json_path: String::new(),
-                },
-                claude: ClaudeConfig {
-                    habilitado: true,
-                    organization_id: String::new(),
-                    cookie: String::new(),
-                },
-            },
+            loki: LokiConfig::default(),
+            providers: ProvidersConfig::default(),
+            barra_tarefas: TaskbarConfig::default(),
         }
     }
 }
@@ -193,13 +302,20 @@ impl Default for AppConfig {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
 
             let paths = ensure_storage()?;
-            let _ = load_or_create_config(&paths)?;
+            // Garante que o config.json exista e esteja normalizado (campos
+            // novos preenchidos com o padrao) ja na inicializacao. A preferencia
+            // de exibir na barra de tarefas e lida da config sob demanda.
+            load_or_create_config(&paths)?;
 
             let shared = Arc::new(SharedState {
                 snapshot: Mutex::new(RuntimeSnapshot::default()),
@@ -224,7 +340,23 @@ pub fn run() {
             };
             app.manage(DashboardPort(dashboard_port));
 
+            // Autostart: liga por padrao na primeira execucao (marcada por um
+            // arquivo). Nas execucoes seguintes, se continuar ligado, reaplica
+            // para manter o caminho do executavel atualizado; se o usuario tiver
+            // desligado pelo menu, fica desligado.
+            let autostart_marker = paths.config_dir.join("autostart_initialized");
+            if !autostart_marker.exists() {
+                let _ = app.autolaunch().enable();
+                let _ = fs::write(&autostart_marker, "1");
+            } else if app.autolaunch().is_enabled().unwrap_or(false) {
+                let _ = app.autolaunch().enable();
+            }
+
             create_tray(app)?;
+
+            #[cfg(target_os = "windows")]
+            taskbar_widget::start();
+
             refresh_tray(app.handle(), &shared)?;
             start_worker(app.handle().clone(), paths.clone(), shared.clone());
 
@@ -245,7 +377,8 @@ pub fn run() {
 }
 
 fn create_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
-    let menu = build_tray_menu(app.handle(), &RuntimeSnapshot::default())?;
+    let (menu, handles) = build_tray_menu(app.handle(), &RuntimeSnapshot::default())?;
+    app.manage(handles);
 
     TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -257,25 +390,62 @@ fn create_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
     Ok(())
 }
 
-fn build_tray_menu<R: Runtime>(
-    app: &AppHandle<R>,
-    snapshot: &RuntimeSnapshot,
-) -> tauri::Result<Menu<R>> {
-    let status_text = if snapshot.paused {
+/// Texto do item de status conforme o estado atual.
+fn tray_status_text(snapshot: &RuntimeSnapshot) -> String {
+    if snapshot.paused {
         "Status: coleta pausada".to_string()
     } else if let Some(error) = &snapshot.last_error {
         format!("Status: erro - {}", truncate(error, 64))
     } else {
         "Status: coleta ativa".to_string()
-    };
+    }
+}
 
-    let codex_text = format!("Codex: {}", metric_text(snapshot.codex_metric.as_ref()));
-    let claude_text = format!("Claude: {}", metric_text(snapshot.claude_metric.as_ref()));
-    let pause_label = if snapshot.paused {
+fn tray_pause_label(snapshot: &RuntimeSnapshot) -> &'static str {
+    if snapshot.paused {
         "Retomar coleta"
     } else {
         "Pausar coleta"
-    };
+    }
+}
+
+/// Se a inicializacao automatica com o sistema esta ativa.
+fn autostart_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Estado da barra de tarefas lido da config (fonte da verdade): por provider,
+/// se esta `habilitado` e se deve aparecer na barra (`mostraNaTaskbarWindows`).
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Default)]
+struct TaskbarFlags {
+    codex_habilitado: bool,
+    codex_mostrar: bool,
+    claude_habilitado: bool,
+    claude_mostrar: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_flags<R: Runtime>(app: &AppHandle<R>) -> TaskbarFlags {
+    app.try_state::<RuntimePaths>()
+        .and_then(|paths| load_or_create_config(paths.inner()).ok())
+        .map(|config| TaskbarFlags {
+            codex_habilitado: config.providers.codex.habilitado,
+            codex_mostrar: config.providers.codex.mostra_na_taskbar_windows,
+            claude_habilitado: config.providers.claude.habilitado,
+            claude_mostrar: config.providers.claude.mostra_na_taskbar_windows,
+        })
+        .unwrap_or_default()
+}
+
+fn build_tray_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    snapshot: &RuntimeSnapshot,
+) -> tauri::Result<(Menu<R>, TrayMenuItems<R>)> {
+    let status_text = tray_status_text(snapshot);
+    let codex_text = format!("Codex: {}", metric_text(snapshot.codex_metric.as_ref()));
+    let claude_text = format!("Claude: {}", metric_text(snapshot.claude_metric.as_ref()));
+    let pause_label = tray_pause_label(snapshot);
 
     let status_item = MenuItem::with_id(app, "status", status_text, false, None::<&str>)?;
     let codex_item = MenuItem::with_id(app, "codex_status", codex_text, false, None::<&str>)?;
@@ -294,24 +464,140 @@ fn build_tray_menu<R: Runtime>(
     let send_now_item = MenuItem::with_id(app, "send_now", "Enviar agora", true, None::<&str>)?;
     let toggle_pause_item =
         MenuItem::with_id(app, "toggle_pause", pause_label, true, None::<&str>)?;
+
+    #[cfg(target_os = "windows")]
+    let autostart_label = "Iniciar com o Windows";
+    #[cfg(not(target_os = "windows"))]
+    let autostart_label = "Iniciar com o sistema";
+    let autostart_item = CheckMenuItem::with_id(
+        app,
+        "toggle_autostart",
+        autostart_label,
+        true,
+        autostart_enabled(app),
+        None::<&str>,
+    )?;
+
     let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
 
-    Menu::with_items(
+    let separator_info = PredefinedMenuItem::separator(app)?;
+    let separator_actions = PredefinedMenuItem::separator(app)?;
+
+    let mut items: Vec<&dyn IsMenuItem<R>> = vec![
+        &status_item,
+        &codex_item,
+        &claude_item,
+        &separator_info,
+        &open_dashboard_item,
+        &open_config_item,
+        &open_logs_item,
+        &send_now_item,
+        &toggle_pause_item,
+        &autostart_item,
+    ];
+
+    // Toggles da barra de tarefas (recurso so do Windows). Cada IA habilitada na
+    // config vira um item com check; se desabilitada, aparece desabilitada. O
+    // estado marcado reflete `mostraNaTaskbarWindows` da config (fonte da verdade).
+    #[cfg(target_os = "windows")]
+    let flags = taskbar_flags(app);
+
+    #[cfg(target_os = "windows")]
+    let separator_taskbar = PredefinedMenuItem::separator(app)?;
+    #[cfg(target_os = "windows")]
+    let taskbar_header = MenuItem::with_id(
         app,
-        &[
-            &status_item,
-            &codex_item,
-            &claude_item,
-            &PredefinedMenuItem::separator(app)?,
-            &open_dashboard_item,
-            &open_config_item,
-            &open_logs_item,
-            &send_now_item,
-            &toggle_pause_item,
-            &PredefinedMenuItem::separator(app)?,
-            &quit_item,
-        ],
-    )
+        "taskbar_header",
+        "Mostrar na barra de tarefas:",
+        false,
+        None::<&str>,
+    )?;
+    #[cfg(target_os = "windows")]
+    let taskbar_codex = CheckMenuItem::with_id(
+        app,
+        "taskbar_codex",
+        "Codex",
+        flags.codex_habilitado,
+        flags.codex_habilitado && flags.codex_mostrar,
+        None::<&str>,
+    )?;
+    #[cfg(target_os = "windows")]
+    let taskbar_claude = CheckMenuItem::with_id(
+        app,
+        "taskbar_claude",
+        "Claude",
+        flags.claude_habilitado,
+        flags.claude_habilitado && flags.claude_mostrar,
+        None::<&str>,
+    )?;
+    #[cfg(target_os = "windows")]
+    {
+        items.push(&separator_taskbar);
+        items.push(&taskbar_header);
+        items.push(&taskbar_codex);
+        items.push(&taskbar_claude);
+    }
+
+    items.push(&separator_actions);
+    items.push(&quit_item);
+
+    let menu = Menu::with_items(app, &items)?;
+    drop(items); // encerra os borrows antes de mover os itens para os handles
+
+    let handles = TrayMenuItems {
+        status: status_item,
+        codex_status: codex_item,
+        claude_status: claude_item,
+        toggle_pause: toggle_pause_item,
+        autostart: autostart_item,
+        #[cfg(target_os = "windows")]
+        taskbar_codex,
+        #[cfg(target_os = "windows")]
+        taskbar_claude,
+    };
+
+    Ok((menu, handles))
+}
+
+/// Atualiza os itens dinamicos do menu do tray no lugar, sem reconstruir o menu
+/// (reconstruir fecharia o menu aberto).
+///
+/// As atualizacoes sao postadas como uma unica tarefa na main thread sem
+/// esperar o resultado. Isso evita que a thread do worker bloqueie enquanto o
+/// menu popup esta aberto (a main thread fica no loop modal do menu ate fechar).
+fn update_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &RuntimeSnapshot) {
+    let status = tray_status_text(snapshot);
+    let codex = format!("Codex: {}", metric_text(snapshot.codex_metric.as_ref()));
+    let claude = format!("Claude: {}", metric_text(snapshot.claude_metric.as_ref()));
+    let pause = tray_pause_label(snapshot).to_string();
+    let autostart_on = autostart_enabled(app);
+
+    #[cfg(target_os = "windows")]
+    let flags = taskbar_flags(app);
+
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        let Some(items) = app.try_state::<TrayMenuItems<R>>() else {
+            return;
+        };
+        let _ = items.status.set_text(status);
+        let _ = items.codex_status.set_text(codex);
+        let _ = items.claude_status.set_text(claude);
+        let _ = items.toggle_pause.set_text(pause);
+        let _ = items.autostart.set_checked(autostart_on);
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = items.taskbar_codex.set_enabled(flags.codex_habilitado);
+            let _ = items
+                .taskbar_codex
+                .set_checked(flags.codex_habilitado && flags.codex_mostrar);
+            let _ = items.taskbar_claude.set_enabled(flags.claude_habilitado);
+            let _ = items
+                .taskbar_claude
+                .set_checked(flags.claude_habilitado && flags.claude_mostrar);
+        }
+    });
 }
 
 fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
@@ -344,6 +630,25 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
         "send_now" => {
             trigger_collection(app);
         }
+        "taskbar_codex" => {
+            toggle_taskbar_provider(app, "codex");
+        }
+        "taskbar_claude" => {
+            toggle_taskbar_provider(app, "claude");
+        }
+        "toggle_autostart" => {
+            let manager = app.autolaunch();
+            let result = if manager.is_enabled().unwrap_or(false) {
+                manager.disable()
+            } else {
+                manager.enable()
+            };
+            if let Err(error) = result {
+                handle_runtime_error(app, &format!("Falha ao alterar inicializacao automatica: {error}"));
+            } else if let Some(shared) = app.try_state::<Arc<SharedState>>() {
+                let _ = refresh_tray(app, &shared);
+            }
+        }
         "toggle_pause" => {
             if let Some(shared) = app.try_state::<Arc<SharedState>>() {
                 {
@@ -364,6 +669,43 @@ fn handle_menu_event<R: Runtime>(app: &AppHandle<R>, menu_id: &str) {
             app.exit(0);
         }
         _ => {}
+    }
+}
+
+/// Alterna a exibicao de um provider na barra de tarefas, persistindo a
+/// preferencia no `config.json` (fonte da verdade) e atualizando o tray.
+fn toggle_taskbar_provider<R: Runtime>(app: &AppHandle<R>, provider: &str) {
+    let Some(paths) = app.try_state::<RuntimePaths>() else {
+        return;
+    };
+
+    let mut config = match load_or_create_config(paths.inner()) {
+        Ok(config) => config,
+        Err(error) => {
+            handle_runtime_error(app, &format!("Falha ao ler config: {error}"));
+            return;
+        }
+    };
+
+    match provider {
+        "codex" => {
+            config.providers.codex.mostra_na_taskbar_windows =
+                !config.providers.codex.mostra_na_taskbar_windows
+        }
+        "claude" => {
+            config.providers.claude.mostra_na_taskbar_windows =
+                !config.providers.claude.mostra_na_taskbar_windows
+        }
+        _ => return,
+    }
+
+    if let Err(error) = write_config(paths.inner(), &config) {
+        handle_runtime_error(app, &format!("Falha ao salvar preferencia da barra: {error}"));
+        return;
+    }
+
+    if let Some(shared) = app.try_state::<Arc<SharedState>>() {
+        let _ = refresh_tray(app, &shared);
     }
 }
 
@@ -770,7 +1112,29 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         );
 
         #[cfg(target_os = "windows")]
-        tray.set_tooltip(Some(tooltip))?;
+        {
+            tray.set_tooltip(Some(tooltip))?;
+            if let Some(paths) = app.try_state::<RuntimePaths>() {
+                if let Ok(config) = load_or_create_config(paths.inner()) {
+                    taskbar_widget::set_offset(config.barra_tarefas.deslocamento);
+                    taskbar_widget::set_side(config.barra_tarefas.lado_esquerdo());
+                    taskbar_widget::set_font_size(config.barra_tarefas.tamanho_fonte_pt());
+                    taskbar_widget::set_font_color(config.barra_tarefas.cor_fonte_rgb());
+                    taskbar_widget::set_provider(
+                        "codex",
+                        config.providers.codex.habilitado
+                            && config.providers.codex.mostra_na_taskbar_windows,
+                        widget_detail(snapshot.codex_metric.as_ref()),
+                    );
+                    taskbar_widget::set_provider(
+                        "claude",
+                        config.providers.claude.habilitado
+                            && config.providers.claude.mostra_na_taskbar_windows,
+                        widget_detail(snapshot.claude_metric.as_ref()),
+                    );
+                }
+            }
+        }
 
         #[cfg(target_os = "linux")]
         tray.set_title(Some(format!(
@@ -779,8 +1143,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
             metric_text(snapshot.claude_metric.as_ref())
         )))?;
 
-        let menu = build_tray_menu(app, &snapshot)?;
-        tray.set_menu(Some(menu))?;
+        update_tray_menu(app, &snapshot);
     }
 
     Ok(())
@@ -859,6 +1222,62 @@ fn metric_text(metric: Option<&UsageMetric>) -> String {
     }
 }
 
+/// Linha de detalhe do widget da barra de tarefas no formato
+/// `20% (2:36h) | 50% (2d)` — uso da sessao (5h) e reset, e uso semanal (7d) e
+/// reset. Mostra apenas a parte da sessao quando nao ha dados de 7 dias.
+#[cfg(target_os = "windows")]
+fn widget_detail(metric: Option<&UsageMetric>) -> String {
+    let Some(metric) = metric else {
+        return "--".to_string();
+    };
+    if metric.status == "erro" {
+        return "erro".to_string();
+    }
+
+    let session = format!(
+        "{:.0}%{}",
+        metric.uso_percentual,
+        reset_suffix(metric.reset_em.as_deref())
+    );
+    match metric.uso_percentual_7d {
+        Some(weekly) => format!(
+            "{session} | {:.0}%{}",
+            weekly,
+            reset_suffix(metric.reset_em_7d.as_deref())
+        ),
+        None => session,
+    }
+}
+
+/// Sufixo " (tempo)" para o reset; vazio quando nao ha reset valido.
+#[cfg(target_os = "windows")]
+fn reset_suffix(iso: Option<&str>) -> String {
+    match format_reset(iso) {
+        Some(text) => format!(" ({text})"),
+        None => String::new(),
+    }
+}
+
+/// Formata o tempo restante ate o reset: "2d", "2:36h" ou "45m".
+#[cfg(target_os = "windows")]
+fn format_reset(iso: Option<&str>) -> Option<String> {
+    let reset = DateTime::parse_from_rfc3339(iso?).ok()?;
+    let seconds = (reset.with_timezone(&Utc) - Utc::now()).num_seconds();
+    if seconds <= 0 {
+        return Some("0m".to_string());
+    }
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if days >= 1 {
+        Some(format!("{days}d"))
+    } else if hours >= 1 {
+        Some(format!("{hours}:{minutes:02}h"))
+    } else {
+        Some(format!("{minutes}m"))
+    }
+}
+
 fn truncate(text: &str, max_len: usize) -> String {
     if text.chars().count() <= max_len {
         return text.to_string();
@@ -926,15 +1345,35 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
 fn load_or_create_config(paths: &RuntimePaths) -> Result<AppConfig, Box<dyn std::error::Error>> {
     if !paths.config_file.exists() {
         let default_config = AppConfig::default();
-        let payload = serde_json::to_string_pretty(&default_config)?;
-        fs::write(&paths.config_file, format!("{payload}\n"))?;
+        write_config(paths, &default_config)?;
         return Ok(default_config);
     }
 
     let content = fs::read_to_string(&paths.config_file)?;
+    // Campos ausentes sao preenchidos com os padroes (containers com
+    // `#[serde(default)]`), preservando os valores ja existentes no arquivo.
     let mut config: AppConfig = serde_json::from_str(&content)?;
     config.intervalo_segundos = config.intervalo_segundos.clamp(5, 3600);
+
+    // Normaliza o arquivo: se algo estava faltando (ou fora do clamp), regrava
+    // com a estrutura completa. A comparacao e feita sobre `Value` para ignorar
+    // diferencas de formatacao/ordem e so reescrever quando houver mudanca real.
+    let original: Value = serde_json::from_str(&content)?;
+    let canonical: Value = serde_json::to_value(&config)?;
+    if original != canonical {
+        write_config(paths, &config)?;
+    }
+
     Ok(config)
+}
+
+fn write_config(
+    paths: &RuntimePaths,
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = serde_json::to_string_pretty(config)?;
+    fs::write(&paths.config_file, format!("{payload}\n"))?;
+    Ok(())
 }
 
 fn append_log_line(
