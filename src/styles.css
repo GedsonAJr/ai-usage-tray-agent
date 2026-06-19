@@ -162,3 +162,4 @@ input:focus, select:focus { outline: none; border-color: #d97757; }
   .nav { flex-direction: row; }
   .uwins { grid-template-columns: 1fr; }
 }
+.uprov-name svg.pico { flex: none; }

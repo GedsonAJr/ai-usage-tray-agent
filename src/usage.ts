@@ -27,6 +27,25 @@ interface Usage {
   codex: ProviderUsage;
 }
 
+// Ícones dos provedores no cabeçalho de cada card. Claude usa o "spark" laranja;
+// o Codex usa o logo do Codex CLI (blob com gradiente roxo→azul e ">_" brancos),
+// reproduzido como SVG inline.
+const ICON_CLAUDE = '<span class="spark">✳</span>';
+const ICON_CODEX =
+  '<svg class="pico" width="20" height="20" viewBox="0 0 100 100" aria-hidden="true">' +
+    '<defs><linearGradient id="codexg" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">' +
+      '<stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>' +
+      '<stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>' +
+    '<g fill="url(#codexg)">' +
+      '<circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>' +
+      '<circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>' +
+      '<circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>' +
+    '</g>' +
+    '<path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" ' +
+      'stroke-linecap="round" stroke-linejoin="round"/>' +
+    '<rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>' +
+  '</svg>';
+
 let DATA: Usage | null = null;
 let initialized = false;
 let tickCount = 0;
@@ -128,10 +147,12 @@ function windowBlock(
 }
 
 /// Card de um provider, cobrindo os estados: desabilitado, sem dado ainda, erro
-/// de coleta, ou as duas janelas (sessão e semanal).
+/// de coleta, ou as duas janelas (sessão e semanal). O ícone do cabeçalho é o do
+/// provedor (Claude = spark; Codex = logo do Codex).
 function renderProvider(label: string, prov: ProviderUsage): string {
+  const icon = label === "Codex" ? ICON_CODEX : ICON_CLAUDE;
   const head = (meta: string) =>
-    `<div class="uprov-head"><div class="uprov-name"><span class="spark">✳</span> ${label}</div><div class="uprov-meta">${meta}</div></div>`;
+    `<div class="uprov-head"><div class="uprov-name">${icon} ${label}</div><div class="uprov-meta">${meta}</div></div>`;
 
   if (!prov.habilitado) {
     return `<div class="uprov disabled">${head('<span class="ubadge muted">desabilitado</span>')}
