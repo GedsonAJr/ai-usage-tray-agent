@@ -2,6 +2,7 @@
 // Configurações) pelo menu lateral. Janela única, aberta pelo clique esquerdo
 // no tray ou pelo item "Abrir". A seção padrão é "Uso atual".
 import { initDashboard, loadDashboard } from "./dashboard";
+import { initEnvio, loadEnvio } from "./envio";
 import { initSettings } from "./settings";
 import { initUsage, loadUsage } from "./usage";
 
@@ -10,7 +11,8 @@ function activate(view: string): void {
     b.classList.toggle("on", (b as HTMLElement).dataset.view === view));
   document.querySelectorAll(".view").forEach((s) =>
     s.classList.toggle("on", s.id === "view-" + view));
-  if (view === "usage") void loadUsage();
+  if (view === "envio") initEnvio();
+  else if (view === "usage") void loadUsage();
   else if (view === "dashboard") initDashboard();
   else if (view === "settings") initSettings();
 }
@@ -22,7 +24,8 @@ document.querySelectorAll(".nav-item").forEach((b) =>
 // para não mostrar dados velhos. Ambas as cargas são baratas (snapshot/cache no
 // backend).
 window.addEventListener("focus", () => {
-  if (document.getElementById("view-usage")?.classList.contains("on")) void loadUsage();
+  if (document.getElementById("view-envio")?.classList.contains("on")) void loadEnvio();
+  else if (document.getElementById("view-usage")?.classList.contains("on")) void loadUsage();
   else if (document.getElementById("view-dashboard")?.classList.contains("on")) void loadDashboard();
 });
 

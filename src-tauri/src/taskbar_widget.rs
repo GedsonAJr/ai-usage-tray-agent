@@ -76,7 +76,7 @@ static ON_ACTIVATE: OnceLock<ActivateCallback> = OnceLock::new();
 /// Callback acionado quando um item do menu de contexto (clique direito) e'
 /// escolhido. Recebe o id do item (mesmos ids do menu do tray).
 static ON_MENU_COMMAND: OnceLock<MenuCommandCallback> = OnceLock::new();
-/// Estado de pausa atual, para rotular o item "Pausar/Retomar coleta" no menu.
+/// Estado de pausa atual, para rotular o item "Pausar/Retomar envio" no menu.
 static PAUSED: AtomicBool = AtomicBool::new(false);
 
 // Ids dos itens do menu de contexto (clique direito). Mapeiam para os mesmos
@@ -935,9 +935,9 @@ pub unsafe fn show_context_menu() {
 
     let paused = PAUSED.load(Ordering::Relaxed);
     let pause_label = if paused {
-        w!("Retomar coleta")
+        w!("Retomar envio")
     } else {
-        w!("Pausar coleta")
+        w!("Pausar envio")
     };
     let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_APP, w!("Abrir"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
