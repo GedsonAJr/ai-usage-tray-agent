@@ -74,6 +74,7 @@
               <button data-stab="codex">Codex</button>
               <button data-stab="claude">Claude</button>
               <button data-stab="barra">Barra de tarefas</button>
+              <button data-stab="widget">Widget</button>
               <button data-stab="sistema">Sistema</button>
             </div>
 
@@ -182,6 +183,66 @@
                     </select>
                     <div class="desc">No modo exato, mostra só a hora se o reset for hoje, ou com a data se for outro dia.</div>
                   </div>
+                  <div class="field">
+                    <label for="set-barraJanelas">Janelas exibidas</label>
+                    <select id="set-barraJanelas">
+                      <option value="ambos">Ambas (sessão e semanal)</option>
+                      <option value="sessao">Apenas sessão (5h)</option>
+                      <option value="semanal">Apenas semanal (7d)</option>
+                    </select>
+                    <div class="desc">Com apenas uma janela, o separador "|" some.</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Widget -->
+              <div class="stab" data-spanel="widget">
+                <p class="hint">Widget flutuante na área de trabalho, sempre na frente, com os cards de uso. Aplicado em ~1s ao salvar (ignorado em macOS).</p>
+                <div class="field">
+                  <label class="check"><input type="checkbox" id="set-wdgHab"><span>Mostrar widget na área de trabalho</span></label>
+                  <div class="desc">Abre/fecha a janelinha do widget. Arraste-a para reposicionar; a posição e o tamanho são lembrados.</div>
+                </div>
+                <div class="row">
+                  <div class="field">
+                    <label class="check"><input type="checkbox" id="set-wdgClaude"><span>Mostrar Claude no widget</span></label>
+                  </div>
+                  <div class="field">
+                    <label class="check"><input type="checkbox" id="set-wdgCodex"><span>Mostrar Codex no widget</span></label>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="check"><input type="checkbox" id="set-wdgTopo"><span>Sempre na frente</span></label>
+                </div>
+                <div class="row">
+                  <div class="field">
+                    <label for="set-wdgJanelas">Janelas exibidas</label>
+                    <select id="set-wdgJanelas">
+                      <option value="ambos">Ambas (sessão e semanal)</option>
+                      <option value="sessao">Apenas sessão (5h)</option>
+                      <option value="semanal">Apenas semanal (7d)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="set-wdgFormatoReset">Formato do reset</label>
+                    <select id="set-wdgFormatoReset">
+                      <option value="restante">Tempo restante (ex.: 3h 33min)</option>
+                      <option value="exato">Hora/data exata (ex.: 14:29 · 22/06, 19:59)</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="set-wdgFundo">Imagem/GIF de fundo</label>
+                  <div class="inline">
+                    <input type="text" id="set-wdgFundo" placeholder="Nenhum fundo selecionado" readonly>
+                    <button type="button" class="btn" id="set-wdgFundoPick">Escolher…</button>
+                    <button type="button" class="btn" id="set-wdgFundoClear">Remover</button>
+                  </div>
+                  <div class="desc">PNG, JPG, GIF, WEBP ou BMP. Vazio = sem fundo (só o painel escuro).</div>
+                </div>
+                <div class="field">
+                  <label for="set-wdgOpac">Opacidade do painel: <span id="set-wdgOpacVal">90</span>%</label>
+                  <input type="range" id="set-wdgOpac" min="0" max="100" step="5" value="90">
+                  <div class="desc">Menor opacidade deixa o fundo (imagem/gif) aparecer mais.</div>
                 </div>
               </div>
 
