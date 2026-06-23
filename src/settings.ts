@@ -20,6 +20,17 @@ interface BarraConfig {
   tamanhoFonte: number;
   corFonte: string;
   formatoReset: string;
+  janelas: string;
+}
+interface WidgetConfig {
+  habilitado: boolean;
+  mostraClaude: boolean;
+  mostraCodex: boolean;
+  fundo: string;
+  sempreNaFrente: boolean;
+  opacidade: number;
+  janelas: string;
+  formatoReset: string;
 }
 interface AppConfig {
   usuario: string;
@@ -27,6 +38,7 @@ interface AppConfig {
   loki: { url: string };
   providers: { codex: CodexConfig; claude: ClaudeConfig };
   barraTarefas: BarraConfig;
+  widget: WidgetConfig;
 }
 interface SettingsData {
   autostart: boolean;
@@ -46,6 +58,7 @@ function fillForm(data: SettingsData): void {
   const codex = c.providers.codex;
   const claude = c.providers.claude;
   const barra = c.barraTarefas;
+  const widget = c.widget;
 
   $<HTMLInputElement>("set-usuario").value = c.usuario ?? "";
   $<HTMLInputElement>("set-intervalo").value = String(c.intervaloSegundos ?? 10);
@@ -65,7 +78,18 @@ function fillForm(data: SettingsData): void {
   $<HTMLInputElement>("set-barraFonte").value = String(barra.tamanhoFonte ?? 9);
   $<HTMLInputElement>("set-barraCor").value = barra.corFonte ?? "auto";
   $<HTMLSelectElement>("set-barraFormatoReset").value = barra.formatoReset === "exato" ? "exato" : "restante";
+  $<HTMLSelectElement>("set-barraJanelas").value = normJanelas(barra.janelas);
   syncColorPicker();
+
+  $<HTMLInputElement>("set-wdgHab").checked = !!widget?.habilitado;
+  $<HTMLInputElement>("set-wdgClaude").checked = widget?.mostraClaude !== false;
+  $<HTMLInputElement>("set-wdgCodex").checked = widget?.mostraCodex !== false;
+  $<HTMLInputElement>("set-wdgTopo").checked = widget?.sempreNaFrente !== false;
+  $<HTMLInputElement>("set-wdgFundo").value = widget?.fundo ?? "";
+  $<HTMLSelectElement>("set-wdgJanelas").value = normJanelas(widget?.janelas);
+  $<HTMLSelectElement>("set-wdgFormatoReset").value = widget?.formatoReset === "exato" ? "exato" : "restante";
+  $<HTMLInputElement>("set-wdgOpac").value = String(widget?.opacidade ?? 90);
+  syncOpacLabel();
 
   $<HTMLInputElement>("set-autostart").checked = !!data.autostart;
   if (data.autostartLabel) $("set-autostartLabel").textContent = data.autostartLabel;
@@ -78,6 +102,8 @@ function collect(): SaveSettings {
   if (!Number.isFinite(deslocamento)) deslocamento = 0;
   let fonte = parseInt($<HTMLInputElement>("set-barraFonte").value, 10);
   if (!Number.isFinite(fonte)) fonte = 9;
+  let opacidade = parseInt($<HTMLInputElement>("set-wdgOpac").value, 10);
+  if (!Number.isFinite(opacidade)) opacidade = 90;
 
   const config: AppConfig = {
     usuario: $<HTMLInputElement>("set-usuario").value.trim(),
@@ -102,6 +128,17 @@ function collect(): SaveSettings {
       tamanhoFonte: fonte,
       corFonte: $<HTMLInputElement>("set-barraCor").value.trim() || "auto",
       formatoReset: $<HTMLSelectElement>("set-barraFormatoReset").value,
+      janelas: $<HTMLSelectElement>("set-barraJanelas").value,
+    },
+    widget: {
+      habilitado: $<HTMLInputElement>("set-wdgHab").checked,
+      mostraClaude: $<HTMLInputElement>("set-wdgClaude").checked,
+      mostraCodex: $<HTMLInputElement>("set-wdgCodex").checked,
+      fundo: $<HTMLInputElement>("set-wdgFundo").value.trim(),
+      sempreNaFrente: $<HTMLInputElement>("set-wdgTopo").checked,
+      opacidade,
+      janelas: $<HTMLSelectElement>("set-wdgJanelas").value,
+      formatoReset: $<HTMLSelectElement>("set-wdgFormatoReset").value,
     },
   };
   return { config, autostart: $<HTMLInputElement>("set-autostart").checked };
@@ -111,6 +148,27 @@ function syncColorPicker(): void {
   const v = $<HTMLInputElement>("set-barraCor").value.trim();
   if (/^#?[0-9a-fA-F]{6}$/.test(v)) {
     $<HTMLInputElement>("set-barraCorPicker").value = "#" + v.replace(/^#/, "");
+  }
+}
+
+/// Reflete o valor do slider de opacidade no rótulo ao lado.
+function syncOpacLabel(): void {
+  $("set-wdgOpacVal").textContent = $<HTMLInputElement>("set-wdgOpac").value;
+}
+
+/// Normaliza a opção de janelas para um dos valores válidos do <select>.
+function normJanelas(value: string | undefined): "ambos" | "sessao" | "semanal" {
+  return value === "sessao" || value === "semanal" ? value : "ambos";
+}
+
+/// Abre o seletor de arquivo nativo (no backend) e joga o caminho escolhido no
+/// campo de fundo. O valor só é persistido ao salvar.
+async function pickBackground(): Promise<void> {
+  try {
+    const path = await invoke<string | null>("pick_widget_background");
+    if (path) $<HTMLInputElement>("set-wdgFundo").value = path;
+  } catch (e) {
+    setMsg("Falha ao escolher arquivo: " + (e instanceof Error ? e.message : String(e)), "err");
   }
 }
 
@@ -176,6 +234,13 @@ export function initSettings(): void {
   $("set-barraCorPicker").addEventListener("input", () => {
     $<HTMLInputElement>("set-barraCor").value = $<HTMLInputElement>("set-barraCorPicker").value;
   });
+
+  $("set-wdgOpac").addEventListener("input", syncOpacLabel);
+  $("set-wdgFundoPick").addEventListener("click", () => void pickBackground());
+  $("set-wdgFundoClear").addEventListener("click", () => {
+    $<HTMLInputElement>("set-wdgFundo").value = "";
+  });
+
   $("settings-save").addEventListener("click", () => void saveSettings());
   $("settings-reload").addEventListener("click", () => void loadSettings());
 

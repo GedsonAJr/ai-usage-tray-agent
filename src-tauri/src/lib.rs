@@ -17,6 +17,7 @@ mod usage_dashboard;
 #[cfg(target_os = "windows")]
 mod taskbar_widget;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,7 @@ struct AppConfig {
     loki: LokiConfig,
     providers: ProvidersConfig,
     barra_tarefas: TaskbarConfig,
+    widget: WidgetConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,9 @@ struct TaskbarConfig {
     /// Como exibir o reset no widget: "restante" (padrao, tempo regressivo ex.:
     /// "2:36h") ou "exato" (hora/data do reset ex.: "19:20" ou "22/06, 19:59").
     formato_reset: String,
+    /// Quais janelas mostrar na barra: "ambos" (padrao), "sessao" (so 5h) ou
+    /// "semanal" (so 7d). Com uma so' janela, o separador "|" some.
+    janelas: String,
 }
 
 impl Default for TaskbarConfig {
@@ -80,6 +85,7 @@ impl Default for TaskbarConfig {
             tamanho_fonte: 9,
             cor_fonte: "auto".to_string(),
             formato_reset: "restante".to_string(),
+            janelas: "ambos".to_string(),
         }
     }
 }
@@ -124,6 +130,47 @@ impl TaskbarConfig {
         let g = u8::from_str_radix(&texto[2..4], 16).ok()?;
         let b = u8::from_str_radix(&texto[4..6], 16).ok()?;
         Some((r, g, b))
+    }
+}
+
+/// Widget flutuante na area de trabalho (janela `widget`, sem moldura, sempre na
+/// frente). Existe em Windows/Linux; ignorado em macOS (transparencia exigiria
+/// `macos-private-api`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct WidgetConfig {
+    /// Exibe o widget na area de trabalho. Padrao desligado.
+    habilitado: bool,
+    /// Mostra o card do Claude no widget (alem de o provider estar habilitado).
+    mostra_claude: bool,
+    /// Mostra o card do Codex no widget (alem de o provider estar habilitado).
+    mostra_codex: bool,
+    /// Caminho do arquivo de imagem/gif usado como fundo. Vazio = sem fundo.
+    fundo: String,
+    /// Mantem o widget sempre na frente das outras janelas. Padrao ligado.
+    sempre_na_frente: bool,
+    /// Opacidade do painel em 0..=100 (padrao 90). Deixa o fundo aparecer.
+    opacidade: u32,
+    /// Quais janelas mostrar nos cards: "ambos" (padrao), "sessao" (so 5h) ou
+    /// "semanal" (so 7d).
+    janelas: String,
+    /// Como exibir o reset nos cards: "restante" (padrao, tempo regressivo) ou
+    /// "exato" (hora/data do reset). Igual a opcao da barra de tarefas.
+    formato_reset: String,
+}
+
+impl Default for WidgetConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: false,
+            mostra_claude: true,
+            mostra_codex: true,
+            fundo: String::new(),
+            sempre_na_frente: true,
+            opacidade: 90,
+            janelas: "ambos".to_string(),
+            formato_reset: "restante".to_string(),
+        }
     }
 }
 
@@ -299,6 +346,7 @@ impl Default for AppConfig {
             loki: LokiConfig::default(),
             providers: ProvidersConfig::default(),
             barra_tarefas: TaskbarConfig::default(),
+            widget: WidgetConfig::default(),
         }
     }
 }
@@ -310,12 +358,29 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            // Persiste so a POSICAO do widget; a altura e' auto-ajustada ao
+            // conteudo (nao faz sentido restaurar tamanho). A janela `main`
+            // fica de fora (negada) e continua centralizando sob demanda.
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["main"])
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE,
+                )
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             usage_dashboard::get_stats,
             get_settings,
             save_settings,
             get_usage,
-            force_collect
+            force_collect,
+            get_widget_state,
+            read_widget_background,
+            pick_widget_background,
+            show_app_menu
         ])
         .setup(|app| {
             // Janela unica do app (Dashboard + Configuracoes) e' criada sob demanda
@@ -364,7 +429,23 @@ pub fn run() {
                     let handle = app_handle.clone();
                     let _ = app_handle.run_on_main_thread(move || show_main_window(&handle));
                 });
+
+                // Clique direito no widget da barra: roteia o item escolhido para
+                // o mesmo tratador do menu do tray, na main thread.
+                let app_handle_menu = app.handle().clone();
+                taskbar_widget::set_on_menu_command(move |id| {
+                    let handle = app_handle_menu.clone();
+                    let id = id.to_string();
+                    let _ = app_handle_menu
+                        .run_on_main_thread(move || handle_menu_event(&handle, &id));
+                });
+
                 taskbar_widget::start();
+            }
+
+            // Abre o widget no boot se estiver habilitado na config.
+            if let Ok(config) = load_or_create_config(&paths) {
+                apply_widget(app.handle(), &config);
             }
 
             refresh_tray(app.handle(), &shared)?;
@@ -501,6 +582,161 @@ async fn force_collect(app: AppHandle) -> Value {
     .await
     .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
+
+/// Estado para o widget da area de trabalho: preferencias do widget mais as
+/// metricas atuais (o mesmo snapshot da tela "Uso atual"). Barato e sem rede.
+fn widget_state_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
+    let snapshot = shared.snapshot.lock().unwrap().clone();
+    let config = load_or_create_config(paths).unwrap_or_default();
+    let widget = &config.widget;
+    json!({
+        "habilitado": widget.habilitado,
+        "mostraClaude": widget.mostra_claude,
+        "mostraCodex": widget.mostra_codex,
+        "fundo": widget.fundo,
+        "opacidade": widget.opacidade,
+        "janelas": widget.janelas,
+        "formatoReset": widget.formato_reset,
+        "sempreNaFrente": widget.sempre_na_frente,
+        "paused": snapshot.paused,
+        "claude": {
+            "habilitado": config.providers.claude.habilitado,
+            "metric": snapshot.claude_metric,
+        },
+        "codex": {
+            "habilitado": config.providers.codex.habilitado,
+            "metric": snapshot.codex_metric,
+        },
+    })
+}
+
+/// Le' o estado do widget (preferencias + uso). Chamado periodicamente pela
+/// janela do widget; barato e sem rede.
+#[tauri::command]
+fn get_widget_state(paths: State<'_, RuntimePaths>, shared: State<'_, Arc<SharedState>>) -> Value {
+    widget_state_value(paths.inner(), shared.inner())
+}
+
+/// Le' o arquivo de fundo configurado e devolve um data URL base64 para exibir no
+/// widget (funciona para imagem e gif). `None` quando nao ha' fundo ou o arquivo
+/// nao pode ser lido. So' e' chamado quando o caminho do fundo muda.
+#[tauri::command]
+fn read_widget_background(paths: State<'_, RuntimePaths>) -> Option<String> {
+    let config = load_or_create_config(paths.inner()).ok()?;
+    let path = config.widget.fundo.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
+    let mime = mime_from_path(path);
+    Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+/// Mime a partir da extensao do arquivo de fundo (imagens e gif).
+fn mime_from_path(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Abre o seletor de arquivo nativo para escolher a imagem/gif de fundo do
+/// widget. Devolve o caminho escolhido, ou `None` se o usuario cancelar. Quem
+/// persiste e' o "Salvar" das Configuracoes (mesmo fluxo dos demais campos).
+#[tauri::command]
+fn pick_widget_background(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter("Imagens e GIFs", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+        .blocking_pick_file()
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+/// Abre o menu do app (mesmos itens do tray) na posicao do cursor. Chamado pelo
+/// clique direito no widget da area de trabalho; reusa o mesmo menu nativo do
+/// widget da barra (que ja' roteia o item escolhido para `handle_menu_event`).
+/// So' Windows: em outros SOs e' um no-op. Roda na main thread, que tem o loop
+/// de mensagens necessario para o menu modal.
+#[tauri::command]
+fn show_app_menu(app: AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app.run_on_main_thread(|| unsafe { taskbar_widget::show_context_menu() });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+    }
+}
+
+/// Cria a janela do widget (sem moldura, sempre na frente, arrastavel) carregando
+/// `widget.html`. Posicao/tamanho sao restaurados pelo plugin window-state quando
+/// houver estado salvo. So' existe em Windows/Linux (transparencia em macOS
+/// exigiria `macos-private-api`).
+#[cfg(not(target_os = "macos"))]
+fn show_widget_window<R: Runtime>(app: &AppHandle<R>, config: &AppConfig) {
+    if app.get_webview_window("widget").is_some() {
+        return;
+    }
+    let result = WebviewWindowBuilder::new(app, "widget", WebviewUrl::App("widget.html".into()))
+        .title("Widget de uso")
+        .inner_size(320.0, 180.0)
+        .min_inner_size(160.0, 120.0)
+        .decorations(false)
+        .transparent(true)
+        .skip_taskbar(true)
+        .always_on_top(config.widget.sempre_na_frente)
+        // Redimensionavel pelo usuario; o tamanho e' salvo (window-state). Na
+        // primeira vez, o proprio widget ajusta a altura ao conteudo.
+        .resizable(true)
+        // Posicao inicial no centro; restauramos a ultima posicao/tamanho
+        // salvos logo abaixo, quando houver estado.
+        .center()
+        .build();
+    match result {
+        Ok(window) => {
+            use tauri_plugin_window_state::{StateFlags, WindowExt};
+            // Reaplica a ultima posicao/tamanho salvos (no-op na primeira vez).
+            let _ = window.restore_state(StateFlags::POSITION | StateFlags::SIZE);
+        }
+        Err(error) => handle_runtime_error(app, &format!("Falha ao abrir o widget: {error}")),
+    }
+}
+
+/// Aplica a config do widget: cria/destroi a janela conforme `habilitado` e
+/// atualiza o "sempre na frente". Pode ser chamada da thread do worker, entao as
+/// operacoes de janela sao despachadas para a main thread.
+#[cfg(not(target_os = "macos"))]
+fn apply_widget<R: Runtime>(app: &AppHandle<R>, config: &AppConfig) {
+    let app = app.clone();
+    let config = config.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        match (config.widget.habilitado, app.get_webview_window("widget")) {
+            (true, Some(window)) => {
+                let _ = window.set_always_on_top(config.widget.sempre_na_frente);
+            }
+            (true, None) => show_widget_window(&app, &config),
+            (false, Some(window)) => {
+                let _ = window.destroy();
+            }
+            (false, None) => {}
+        }
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn apply_widget<R: Runtime>(_app: &AppHandle<R>, _config: &AppConfig) {}
 
 fn create_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
     let (menu, handles) = build_tray_menu(app.handle(), &RuntimeSnapshot::default())?;
@@ -1152,6 +1388,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         #[cfg(target_os = "windows")]
         {
             tray.set_tooltip(Some(tooltip))?;
+            taskbar_widget::set_paused(snapshot.paused);
             if let Some(paths) = app.try_state::<RuntimePaths>() {
                 if let Ok(config) = load_or_create_config(paths.inner()) {
                     taskbar_widget::set_offset(config.barra_tarefas.deslocamento);
@@ -1159,17 +1396,29 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     taskbar_widget::set_font_size(config.barra_tarefas.tamanho_fonte_pt());
                     taskbar_widget::set_font_color(config.barra_tarefas.cor_fonte_rgb());
                     let mostrar_hora = config.barra_tarefas.mostrar_hora_reset();
+                    let (mostra_sessao, mostra_semanal) =
+                        parse_janelas(&config.barra_tarefas.janelas);
                     taskbar_widget::set_provider(
                         "codex",
                         config.providers.codex.habilitado
                             && config.providers.codex.mostra_na_taskbar_windows,
-                        widget_detail(snapshot.codex_metric.as_ref(), mostrar_hora),
+                        widget_detail(
+                            snapshot.codex_metric.as_ref(),
+                            mostrar_hora,
+                            mostra_sessao,
+                            mostra_semanal,
+                        ),
                     );
                     taskbar_widget::set_provider(
                         "claude",
                         config.providers.claude.habilitado
                             && config.providers.claude.mostra_na_taskbar_windows,
-                        widget_detail(snapshot.claude_metric.as_ref(), mostrar_hora),
+                        widget_detail(
+                            snapshot.claude_metric.as_ref(),
+                            mostrar_hora,
+                            mostra_sessao,
+                            mostra_semanal,
+                        ),
                     );
                 }
             }
@@ -1181,6 +1430,15 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
             metric_text(snapshot.codex_metric.as_ref()),
             metric_text(snapshot.claude_metric.as_ref())
         )))?;
+
+        // Aplica a config do widget (criar/destruir/sempre-na-frente) em
+        // Windows/Linux. Le' o config a cada ciclo, como a barra de tarefas.
+        #[cfg(not(target_os = "macos"))]
+        if let Some(paths) = app.try_state::<RuntimePaths>() {
+            if let Ok(config) = load_or_create_config(paths.inner()) {
+                apply_widget(app, &config);
+            }
+        }
 
         update_tray_menu(app, &snapshot);
     }
@@ -1261,12 +1519,30 @@ fn metric_text(metric: Option<&UsageMetric>) -> String {
     }
 }
 
+/// Quais janelas exibir a partir da config "janelas": devolve
+/// `(mostra_sessao, mostra_semanal)`. "sessao" -> so 5h; "semanal" -> so 7d;
+/// qualquer outro valor (inclusive "ambos") -> as duas.
+#[cfg(target_os = "windows")]
+fn parse_janelas(value: &str) -> (bool, bool) {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "sessao" | "sessão" | "session" | "5h" => (true, false),
+        "semanal" | "semana" | "weekly" | "7d" => (false, true),
+        _ => (true, true),
+    }
+}
+
 /// Linha de detalhe do widget da barra de tarefas. Com `mostrar_hora = false`
 /// usa o tempo restante (`20% (2:36h) | 50% (2d)`); com `true` usa a hora/data
-/// exata do reset (`20% (19:20) | 50% (22/06, 19:59)`). Uso da sessao (5h) e uso
-/// semanal (7d); mostra apenas a parte da sessao quando nao ha dados de 7 dias.
+/// exata do reset (`20% (19:20) | 50% (22/06, 19:59)`). `mostra_sessao`/
+/// `mostra_semanal` escolhem as janelas (5h/7d); com uma so', o separador "|"
+/// some. Se a janela semanal nao tem dados, cai na sessao.
 #[cfg(target_os = "windows")]
-fn widget_detail(metric: Option<&UsageMetric>, mostrar_hora: bool) -> String {
+fn widget_detail(
+    metric: Option<&UsageMetric>,
+    mostrar_hora: bool,
+    mostra_sessao: bool,
+    mostra_semanal: bool,
+) -> String {
     let Some(metric) = metric else {
         return "--".to_string();
     };
@@ -1283,14 +1559,22 @@ fn widget_detail(metric: Option<&UsageMetric>, mostrar_hora: bool) -> String {
     };
 
     let session = format!("{:.0}%{}", metric.uso_percentual, suffix(metric.reset_em.as_deref()));
-    match metric.uso_percentual_7d {
-        Some(weekly) => format!(
-            "{session} | {:.0}%{}",
-            weekly,
-            suffix(metric.reset_em_7d.as_deref())
-        ),
-        None => session,
+
+    let mut parts: Vec<String> = Vec::new();
+    if mostra_sessao {
+        parts.push(session.clone());
     }
+    if mostra_semanal {
+        if let Some(weekly) = metric.uso_percentual_7d {
+            parts.push(format!("{:.0}%{}", weekly, suffix(metric.reset_em_7d.as_deref())));
+        }
+    }
+    // Sem nenhuma parte (ex.: so' semanal escolhido mas sem dados de 7d): mostra
+    // a sessao para nao ficar vazio.
+    if parts.is_empty() {
+        return session;
+    }
+    parts.join(" | ")
 }
 
 /// Sufixo " (tempo)" para o reset (tempo restante); vazio quando nao ha reset valido.
@@ -1423,6 +1707,7 @@ fn load_or_create_config(paths: &RuntimePaths) -> Result<AppConfig, Box<dyn std:
     // `#[serde(default)]`), preservando os valores ja existentes no arquivo.
     let mut config: AppConfig = serde_json::from_str(&content)?;
     config.intervalo_segundos = config.intervalo_segundos.clamp(5, 3600);
+    config.widget.opacidade = config.widget.opacidade.clamp(0, 100);
 
     // Normaliza o arquivo: se algo estava faltando (ou fora do clamp), regrava
     // com a estrutura completa. A comparacao e feita sobre `Value` para ignorar

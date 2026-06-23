@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 // @ts-expect-error process is a nodejs global
@@ -5,6 +6,17 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+
+  // Duas paginas: a janela principal (index.html) e o widget da area de
+  // trabalho (widget.html), ambas empacotadas no build.
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        widget: fileURLToPath(new URL("./widget.html", import.meta.url)),
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

@@ -69,6 +69,33 @@ static FONT_POINT: AtomicI32 = AtomicI32::new(FONT_POINT_DEFAULT);
 static FONT_COLOR: AtomicI32 = AtomicI32::new(-1);
 /// Callback acionado quando o usuario clica num widget (abrir a janela do app).
 static ON_ACTIVATE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+/// Callback acionado quando um item do menu de contexto (clique direito) e'
+/// escolhido. Recebe o id do item (mesmos ids do menu do tray).
+static ON_MENU_COMMAND: OnceLock<Box<dyn Fn(&str) + Send + Sync>> = OnceLock::new();
+/// Estado de pausa atual, para rotular o item "Pausar/Retomar coleta" no menu.
+static PAUSED: AtomicBool = AtomicBool::new(false);
+
+// Ids dos itens do menu de contexto (clique direito). Mapeiam para os mesmos
+// ids de acao do menu do tray (ver `handle_menu_event` no lib.rs).
+const CMD_OPEN_APP: usize = 1;
+const CMD_OPEN_CONFIG: usize = 2;
+const CMD_OPEN_LOGS: usize = 3;
+const CMD_SEND_NOW: usize = 4;
+const CMD_TOGGLE_PAUSE: usize = 5;
+const CMD_QUIT: usize = 6;
+
+/// Converte o id numerico do menu Win32 no id de acao usado por `handle_menu_event`.
+fn menu_command_id(cmd: usize) -> Option<&'static str> {
+    match cmd {
+        CMD_OPEN_APP => Some("open_app"),
+        CMD_OPEN_CONFIG => Some("open_config"),
+        CMD_OPEN_LOGS => Some("open_logs"),
+        CMD_SEND_NOW => Some("send_now"),
+        CMD_TOGGLE_PAUSE => Some("toggle_pause"),
+        CMD_QUIT => Some("quit"),
+        _ => None,
+    }
+}
 
 fn state() -> &'static Mutex<Vec<ProviderState>> {
     STATE.get_or_init(|| {
@@ -151,6 +178,17 @@ pub fn set_font_color(rgb: Option<(u8, u8, u8)>) {
 /// janela do app). So o primeiro registro vale.
 pub fn set_on_activate<F: Fn() + Send + Sync + 'static>(callback: F) {
     let _ = ON_ACTIVATE.set(Box::new(callback));
+}
+
+/// Registra o callback chamado quando um item do menu de contexto (clique
+/// direito no widget) e' escolhido. So o primeiro registro vale.
+pub fn set_on_menu_command<F: Fn(&str) + Send + Sync + 'static>(callback: F) {
+    let _ = ON_MENU_COMMAND.set(Box::new(callback));
+}
+
+/// Informa o estado de pausa atual (para o rotulo do item de menu).
+pub fn set_paused(paused: bool) {
+    PAUSED.store(paused, Ordering::Relaxed);
 }
 
 /// Cor da fonte configurada, ou `None` se estiver em modo automatico.
@@ -872,6 +910,81 @@ unsafe fn read_hkcu_dword(subkey: &str, value_name: &str) -> Option<u32> {
     }
 }
 
+/// Mostra o menu de contexto (mesmos itens do tray) na posicao do cursor e
+/// dispara o callback com o item escolhido. Cria uma janela-dona top-level
+/// invisivel: `TrackPopupMenu` precisa de uma janela em foreground para fechar
+/// ao clicar fora, e o widget e' uma janela-filha (nao pode ser foreground).
+/// Tambem usada pelo widget da area de trabalho (clique direito), via lib.rs.
+pub unsafe fn show_context_menu() {
+    let menu = match CreatePopupMenu() {
+        Ok(handle) => handle,
+        Err(_) => return,
+    };
+
+    let paused = PAUSED.load(Ordering::Relaxed);
+    let pause_label = if paused {
+        w!("Retomar coleta")
+    } else {
+        w!("Pausar coleta")
+    };
+    let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_APP, w!("Abrir"));
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_CONFIG, w!("Abrir config.json"));
+    let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_LOGS, w!("Abrir pasta de logs"));
+    let _ = AppendMenuW(menu, MF_STRING, CMD_SEND_NOW, w!("Enviar agora"));
+    let _ = AppendMenuW(menu, MF_STRING, CMD_TOGGLE_PAUSE, pause_label);
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Sair"));
+
+    let mut point = POINT::default();
+    let _ = GetCursorPos(&mut point);
+
+    // Janela-dona invisivel (1x1, transparente) so' para ancorar o menu.
+    let owner = match CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+        CLASS_NAME,
+        PCWSTR::null(),
+        WS_POPUP,
+        point.x,
+        point.y,
+        1,
+        1,
+        None,
+        None,
+        Some(module_handle()),
+        None,
+    ) {
+        Ok(handle) => handle,
+        Err(_) => {
+            let _ = DestroyMenu(menu);
+            return;
+        }
+    };
+    let _ = SetLayeredWindowAttributes(owner, COLORREF(0), 0, LWA_ALPHA);
+    let _ = ShowWindow(owner, SW_SHOW);
+    let _ = SetForegroundWindow(owner);
+
+    let chosen = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        Some(0),
+        owner,
+        None,
+    );
+    // Truque classico (KB135788) para o menu fechar corretamente.
+    let _ = PostMessageW(Some(owner), WM_NULL, WPARAM(0), LPARAM(0));
+    let _ = DestroyMenu(menu);
+    let _ = DestroyWindow(owner);
+
+    if let Some(id) = menu_command_id(chosen.0 as usize) {
+        if let Some(callback) = ON_MENU_COMMAND.get() {
+            callback(id);
+        }
+    }
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -893,6 +1006,11 @@ unsafe extern "system" fn wnd_proc(
             if let Some(callback) = ON_ACTIVATE.get() {
                 callback();
             }
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            // Clique direito: abre o menu do app (mesmos itens do tray).
+            show_context_menu();
             LRESULT(0)
         }
         WM_SETCURSOR => {
