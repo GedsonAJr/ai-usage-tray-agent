@@ -179,7 +179,7 @@ async function pickBackground(): Promise<void> {
 function setMsg(text: string, kind?: "ok" | "err"): void {
   const node = $("settings-msg");
   node.textContent = text;
-  node.className = "msg grow" + (kind ? " " + kind : "");
+  node.className = "msg" + (kind ? " " + kind : "");
 }
 
 export async function loadSettings(): Promise<void> {
@@ -222,13 +222,12 @@ function scheduleAutoSave(): void {
 
 async function autoSave(): Promise<void> {
   const seq = saveSeq;
-  setMsg("Salvando…");
   try {
     const data = await invoke<SettingsData>("save_settings", { settings: collect() });
     // Só reflete a normalização (clamp de intervalo/fonte, validação de cor) se
     // não houve mudança nova e nada está sendo digitado.
     if (seq === saveSeq && !isEditingField()) fillForm(data);
-    setMsg("Salvo. Aplicado em ~1s.", "ok");
+    setMsg("");
   } catch (e) {
     setMsg("Erro ao salvar: " + (e instanceof Error ? e.message : String(e)), "err");
   }

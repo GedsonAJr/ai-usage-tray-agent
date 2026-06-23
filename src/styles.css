@@ -146,9 +146,8 @@ input:focus, select:focus { outline: none; border-color: #d97757; }
 .btn.save:hover { background: #e08a6d; }
 .btn.save:disabled { opacity: .55; cursor: default; }
 .winonly { color: #6f6c64; font-size: 11px; border: 1px solid #34322d; border-radius: 6px; padding: 1px 6px; margin-left: 8px; }
-.settings-bar { display: flex; align-items: center; gap: 12px; justify-content: flex-end;
-  border-top: 1px solid #34322d; margin: 8px -18px -18px; padding: 14px 18px; }
-.settings-bar .grow { margin-right: auto; }
+.settings-head { display: flex; align-items: center; gap: 12px; }
+.settings-head h1 { margin-right: auto; }
 .msg { font-size: 13.5px; }
 .msg.ok { color: #7fc99a; }
 .msg.err { color: #e0816f; }
