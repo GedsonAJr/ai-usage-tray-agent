@@ -282,8 +282,12 @@ export function initSettings(): void {
   // O resultado aparece em diálogo nativo; aqui só damos um feedback imediato.
   $("set-checkUpdates").addEventListener("click", () => {
     setMsg("Verificando atualizações…");
-    void invoke("check_updates_now").catch((e) =>
-      setMsg("Falha ao verificar atualizações: " + (e instanceof Error ? e.message : String(e)), "err"));
+    // O comando só resolve quando o fluxo (verificação + diálogo nativo) termina;
+    // aí limpamos o aviso. O resultado em si aparece no diálogo.
+    void invoke("check_updates_now")
+      .then(() => setMsg(""))
+      .catch((e) =>
+        setMsg("Falha ao verificar atualizações: " + (e instanceof Error ? e.message : String(e)), "err"));
   });
 
   void loadSettings();

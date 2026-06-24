@@ -2000,11 +2000,13 @@ async fn check_for_updates<R: Runtime>(app: AppHandle<R>, manual: bool) {
 }
 
 /// Acionado pelo botao "Buscar atualizacoes" da aba Sistema (Configuracoes).
-/// Dispara a verificacao em segundo plano (mesma usada pelo tray), com feedback
-/// via dialogo nativo. Retorna na hora; o trabalho corre na tarefa async.
+/// Faz a verificacao (mesma usada pelo tray), com feedback via dialogo nativo.
+/// Comando `async`: roda fora da main thread (os dialogos usam `blocking_show`) e
+/// so' resolve quando o fluxo termina, para a UI poder limpar o aviso de
+/// "verificando".
 #[tauri::command]
-fn check_updates_now(app: AppHandle) {
-    tauri::async_runtime::spawn(check_for_updates(app, true));
+async fn check_updates_now(app: AppHandle) {
+    check_for_updates(app, true).await;
 }
 
 fn build_error_metric(usuario: &str, ferramenta: &str, erro: &str) -> UsageMetric {
