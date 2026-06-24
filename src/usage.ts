@@ -118,7 +118,7 @@ function tick(): void {
 function render(): void {
   if (!DATA) return;
   el("usage-banner").innerHTML = DATA.paused
-    ? '<div class="ubanner">⏸ Coleta automática pausada. "Atualizar agora" busca dados novos; retome a coleta pelo menu do tray.</div>'
+    ? '<div class="ubanner">⏸ Envio ao Loki pausado. Os dados continuam sendo coletados e exibidos aqui; retome o envio na tela "Envio de dados" ou no menu do tray.</div>'
     : "";
   el("usage-cards").innerHTML =
     renderProvider("Claude", DATA.claude) + renderProvider("Codex", DATA.codex);

@@ -11,7 +11,7 @@ O projeto foi feito com:
 ## O que ele faz
 
 - Inicia no tray sem abrir janela principal para o usuário
-- Tem uma janela nativa (webview) com **Uso atual**, **Dashboard Claude** e **Configurações**
+- Tem uma janela nativa (webview) com **Envio de dados**, **Uso atual**, **Dashboard Claude** e **Configurações**
 - Coleta uso do Codex e do Claude em intervalo configurável
 - Envia logs estruturados JSON para Loki
 - Mantém logs locais
@@ -27,7 +27,7 @@ Funcional, com:
 - Coleta real do Codex usando `auth.json`
 - Coleta real do Claude usando `organizationId` e `sessionKey`
 - Envio para Loki sem `tenant` e sem `basic auth`
-- Janela do app com **Uso atual**, **Dashboard Claude** e **Configurações** (com
+- Janela do app com **Envio de dados**, **Uso atual**, **Dashboard Claude** e **Configurações** (com
   abas e **auto-save**)
 - Widget na barra de tarefas (Windows) e **widget flutuante na área de trabalho**
 - Empacotamento pronto:
@@ -93,6 +93,11 @@ Exemplo:
     "janelas": "ambos",
     "formatoReset": "restante",
     "fundo": ""
+  },
+  "envio": {
+    "pausado": false,
+    "claude": true,
+    "codex": true
   }
 }
 ```
@@ -136,23 +141,48 @@ Itens do menu:
 - Abrir `config.json`
 - Abrir pasta de logs
 - Enviar agora
-- Pausar/retomar coleta
+- Pausar/retomar envio
 - Sair
 
 > A exibição de cada IA na barra de tarefas e a inicialização automática não são
 > itens do tray; são editadas nas **Configurações** do app (abas Barra de
 > tarefas e Sistema).
 
-## Janela do app (Uso atual, Dashboard Claude e Configurações)
+## Janela do app (Envio de dados, Uso atual, Dashboard Claude e Configurações)
 
 A interface é uma janela nativa (webview do Tauri), aberta pelo clique esquerdo
 no tray ou pelo item **Abrir**. Não usa navegador nem servidor HTTP local: o
 frontend conversa com o backend Rust por comandos (IPC). Um menu lateral troca
-entre três seções. Fechar pela janela (X) **esconde** o app (continua no tray).
+entre as seções. Fechar pela janela (X) **esconde** o app (continua no tray).
+
+### Envio de dados
+
+Primeira tela do menu. Controla o **envio das métricas ao Loki** sem afetar a
+coleta — os dados continuam sendo coletados e exibidos em "Uso atual", no widget
+e na barra mesmo com o envio pausado/desabilitado. Traz:
+
+- **Estado atual** (envio ativo/pausado) e o horário do último envio bem-sucedido.
+- **Pausar/retomar envio** (geral): suspende só o envio ao Loki. Persistido em
+  `config.json` (`envio.pausado`) e **sincronizado com o menu do tray** — pausar
+  pelo tray reflete aqui e vice-versa.
+- **Enviar agora** (geral): força um envio imediato, ignorando a pausa (mas
+  respeitando o desligamento por provedor).
+- **Envio por provedor**: liga/desliga o envio de Claude e/ou Codex
+  (`envio.claude`, `envio.codex`), sem parar a coleta deles.
+- **Histórico de envios**: data/hora e status (sucesso/falha) dos últimos envios,
+  atualizado quase em tempo real. Botão **Limpar** zera a lista.
+
+Tudo em `envio` (pausa e envio por provedor) é **persistido no `config.json`** e
+gerenciado só por esta tela — o painel de **Configurações** não toca nesses
+campos, então editar as configurações não reativa o envio nem tira a pausa. O
+histórico tem altura limitada e **rola por dentro** do card.
+
+Os dados vêm do comando `get_envio_state`; as ações usam `set_envio_paused`,
+`set_envio_provider`, `envio_send_now` e `clear_send_log`.
 
 ### Uso atual
 
-Primeira tela do menu. Mostra, para **Claude** e **Codex**, o uso da **sessão
+Mostra, para **Claude** e **Codex**, o uso da **sessão
 (5h)** e **semanal (7d)** com barra de progresso, tempo restante para o reset
 (contagem regressiva ao vivo) e o horário/data exatos do próximo reset. Traz
 ainda "atualizado há Xs" e o botão **Atualizar agora** (força uma coleta nova).
@@ -387,7 +417,8 @@ Codex:
 index.html            # janela principal do app (menu lateral + secoes)
 widget.html           # janela do widget flutuante da area de trabalho
 src/
-  main.ts             # shell: navegacao entre Uso atual, Dashboard Claude e Configuracoes
+  main.ts             # shell: navegacao entre Envio de dados, Uso atual, Dashboard Claude e Configuracoes
+  envio.ts            # tela "Envio de dados" (pausa/envio por provedor, historico)
   usage.ts            # tela "Uso atual" (consome get_usage/force_collect)
   usage-format.ts     # helpers de formatacao/icones compartilhados (uso, reset, cores)
   dashboard.ts        # dashboard de uso do Claude Code (consome get_stats)
@@ -399,7 +430,8 @@ src-tauri/
   src/
     lib.rs             # tray, worker de coleta, janela do widget e comandos IPC
                        # (get_stats/get_settings/save_settings/get_usage/force_collect/
-                       #  get_widget_state/read_widget_background/pick_widget_background)
+                       #  get_widget_state/read_widget_background/pick_widget_background/
+                       #  get_envio_state/set_envio_paused/set_envio_provider/envio_send_now/clear_send_log)
     main.rs
     usage_dashboard.rs # coleta as estatisticas do dashboard
     taskbar_widget.rs  # widget da barra de tarefas (somente Windows)

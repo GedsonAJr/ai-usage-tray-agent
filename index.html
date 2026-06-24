@@ -13,6 +13,7 @@
       <aside class="sidebar">
         <div class="brand">AiUsage</div>
         <nav class="nav">
+          <button type="button" class="nav-item" data-view="envio">Envio de dados</button>
           <button type="button" class="nav-item on" data-view="usage">Uso atual</button>
           <button type="button" class="nav-item" data-view="dashboard">Dashboard Claude</button>
           <button type="button" class="nav-item" data-view="settings">Configurações</button>
@@ -20,6 +21,31 @@
       </aside>
 
       <main class="content">
+        <!-- ===== Envio de dados ===== -->
+        <section id="view-envio" class="view">
+          <h1>Envio de dados</h1>
+          <p class="sub">Controle do envio das métricas ao Loki. A coleta continua mesmo com o envio pausado ou desabilitado — os dados seguem aparecendo em "Uso atual", no widget e na barra de tarefas.</p>
+          <div id="envio-banner"></div>
+          <div id="envio-state"></div>
+          <div class="panel">
+            <div class="envio-prov-head">
+              <h2 class="envio-h2">Envio por provedor</h2>
+              <span class="hint envio-h2-hint">Desligue para parar de enviar um provedor sem afetar a coleta.</span>
+            </div>
+            <div id="envio-providers"></div>
+          </div>
+          <div class="panel">
+            <div class="envio-log-head">
+              <h2 class="envio-h2">Histórico de envios</h2>
+              <button type="button" class="btn" id="envio-clear">Limpar</button>
+            </div>
+            <div id="envio-log"></div>
+          </div>
+          <div class="usage-footer">
+            <span id="envio-foot" class="foot"></span>
+          </div>
+        </section>
+
         <!-- ===== Uso atual ===== -->
         <section id="view-usage" class="view on">
           <h1>Uso atual</h1>
