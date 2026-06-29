@@ -4,10 +4,22 @@
 import { initCodexDashboard, loadCodexDashboard } from "./codex-dashboard";
 import { initDashboard, loadDashboard } from "./dashboard";
 import { initEnvio, loadEnvio } from "./envio";
+import { isTauri } from "./ipc";
 import { initSettings } from "./settings";
 import { initSobre } from "./sobre";
 import { checkUpdateStatus } from "./update-status";
 import { initUsage, loadUsage } from "./usage";
+
+// Modo navegador (servidor HTTP dos dashboards): expõe apenas as telas de leitura.
+// As demais (Envio, Configurações, Sobre) dependem de comandos não publicados pelo
+// servidor e ficam ocultas; o backend também recusa esses comandos via HTTP.
+const VIEWS_SOMENTE_TAURI = ["envio", "settings", "sobre"];
+if (!isTauri) {
+  document.body.classList.add("modo-web");
+  for (const view of VIEWS_SOMENTE_TAURI) {
+    document.querySelector(`.nav-item[data-view="${view}"]`)?.remove();
+  }
+}
 
 function activate(view: string): void {
   document.querySelectorAll(".nav-item").forEach((b) =>
@@ -39,5 +51,6 @@ initUsage();
 
 // Ao abrir a janela, verifica atualização (uma vez) — se houver, o item "Sobre"
 // do menu ganha o badge "Atualização disponível". A tela "Sobre" reaproveita
-// esse resultado (não re-verifica ao abrir).
-void checkUpdateStatus();
+// esse resultado (não re-verifica ao abrir). Só no Tauri: no navegador não há
+// item "Sobre" nem o comando de update exposto.
+if (isTauri) void checkUpdateStatus();

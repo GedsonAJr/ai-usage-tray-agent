@@ -33,6 +33,12 @@ interface WidgetConfig {
   formatoReset: string;
   modo: string;
 }
+interface ServerConfig {
+  habilitado: boolean;
+  host: string;
+  porta: number;
+  pin: string;
+}
 interface AppConfig {
   usuario: string;
   intervaloSegundos: number;
@@ -40,6 +46,7 @@ interface AppConfig {
   providers: { codex: CodexConfig; claude: ClaudeConfig };
   barraTarefas: BarraConfig;
   widget: WidgetConfig;
+  servidor: ServerConfig;
 }
 interface SettingsData {
   autostart: boolean;
@@ -61,6 +68,7 @@ function fillForm(data: SettingsData): void {
   const claude = c.providers.claude;
   const barra = c.barraTarefas;
   const widget = c.widget;
+  const servidor = c.servidor;
 
   $<HTMLInputElement>("set-usuario").value = c.usuario ?? "";
   $<HTMLInputElement>("set-intervalo").value = String(c.intervaloSegundos ?? 10);
@@ -94,6 +102,11 @@ function fillForm(data: SettingsData): void {
   $<HTMLInputElement>("set-wdgOpac").value = String(widget?.opacidade ?? 90);
   syncOpacLabel();
 
+  $<HTMLInputElement>("set-srvHab").checked = !!servidor?.habilitado;
+  $<HTMLSelectElement>("set-srvHost").value = servidor?.host === "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
+  $<HTMLInputElement>("set-srvPorta").value = String(servidor?.porta ?? 8770);
+  $<HTMLInputElement>("set-srvPin").value = servidor?.pin ?? "";
+
   $<HTMLInputElement>("set-autostart").checked = !!data.autostart;
   if (data.autostartLabel) $("set-autostartLabel").textContent = data.autostartLabel;
 }
@@ -107,6 +120,8 @@ function collect(): SaveSettings {
   if (!Number.isFinite(fonte)) fonte = 9;
   let opacidade = parseInt($<HTMLInputElement>("set-wdgOpac").value, 10);
   if (!Number.isFinite(opacidade)) opacidade = 90;
+  let srvPorta = parseInt($<HTMLInputElement>("set-srvPorta").value, 10);
+  if (!Number.isFinite(srvPorta) || srvPorta < 1 || srvPorta > 65535) srvPorta = 8770;
 
   const config: AppConfig = {
     usuario: $<HTMLInputElement>("set-usuario").value.trim(),
@@ -143,6 +158,12 @@ function collect(): SaveSettings {
       janelas: $<HTMLSelectElement>("set-wdgJanelas").value,
       formatoReset: $<HTMLSelectElement>("set-wdgFormatoReset").value,
       modo: $<HTMLSelectElement>("set-wdgModo").value,
+    },
+    servidor: {
+      habilitado: $<HTMLInputElement>("set-srvHab").checked,
+      host: $<HTMLSelectElement>("set-srvHost").value,
+      porta: srvPorta,
+      pin: $<HTMLInputElement>("set-srvPin").value.trim(),
     },
   };
   return { config, autostart: $<HTMLInputElement>("set-autostart").checked };
@@ -271,6 +292,12 @@ export function initSettings(): void {
     const show = input.type === "password";
     input.type = show ? "text" : "password";
     $("set-cookieToggle").textContent = show ? "Ocultar" : "Mostrar";
+  });
+  $("set-srvPinToggle").addEventListener("click", () => {
+    const input = $<HTMLInputElement>("set-srvPin");
+    const show = input.type === "password";
+    input.type = show ? "text" : "password";
+    $("set-srvPinToggle").textContent = show ? "Ocultar" : "Mostrar";
   });
   $("set-barraCor").addEventListener("input", syncColorPicker);
   $("set-barraCorPicker").addEventListener("input", () => {

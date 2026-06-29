@@ -100,6 +100,12 @@ Exemplo:
     "pausado": false,
     "claude": true,
     "codex": true
+  },
+  "servidor": {
+    "habilitado": false,
+    "host": "127.0.0.1",
+    "porta": 8770,
+    "pin": ""
   }
 }
 ```
@@ -242,6 +248,9 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
   Mínimo ou Anel duplo), `janelas`, `formatoReset` (tempo restante, hora/data
   exata ou nenhum), imagem/gif de `fundo` (com seletor de arquivo) e `opacidade`
   do painel.
+- **Servidor**: liga o **servidor HTTP dos dashboards** (ver seção abaixo) —
+  `habilitado`, `host` (apenas local `127.0.0.1` ou rede `0.0.0.0`), `porta` e
+  `pin` de acesso (com mostrar/ocultar).
 - **Sistema**: **Iniciar com o sistema** (autostart) — não fica no `config.json`,
   é gerenciado pelo `tauri-plugin-autostart`.
 
@@ -388,6 +397,36 @@ sem reiniciar.
 
 Em macOS o widget é ignorado.
 
+## Dashboards no navegador (servidor HTTP com PIN)
+
+Opcionalmente, o app pode servir os **dashboards de uso pelo navegador**, além da
+janela nativa. É um servidor HTTP embutido no próprio app (não precisa de processo
+externo), ligado pela aba **Servidor** das Configurações (ou por `servidor` no
+`config.json`).
+
+- **Mesma interface**: o servidor entrega a **mesma SPA** da janela nativa; o
+  frontend detecta que está no navegador e troca o IPC do Tauri por `fetch`
+  (`src/ipc.ts`).
+- **Somente leitura**: expõe apenas **Uso atual**, **Dashboard Claude** e
+  **Dashboard Codex**. As telas de **Envio** e **Configurações** e as credenciais
+  (cookie do Claude, token do Codex) **não** ficam acessíveis — o backend recusa
+  qualquer comando fora dessa lista.
+- **Acesso por PIN**: ao abrir, o navegador pede um **PIN** (tela de login →
+  cookie de sessão em memória). Sem PIN definido, o servidor não inicia mesmo
+  habilitado.
+- **Bind configurável**: `host` `127.0.0.1` (padrão) aceita só conexões locais;
+  `0.0.0.0` aceita da rede. O servidor fala **HTTP puro** — para expor com
+  **HTTPS**, coloque um proxy/túnel na frente (ex.: Cloudflare Tunnel) que termine
+  o TLS.
+- **Aplicação imediata**: ligar/desligar e trocar `host`/`porta`/`pin` nas
+  Configurações **(re)inicia** o servidor na hora (a troca de host/porta encerra as
+  sessões abertas). O PIN é relido a cada login.
+
+> Observação: o servidor entrega os assets **embutidos no app empacotado**. Em
+> `npm run tauri dev` os assets não ficam embutidos, então a API responde mas a
+> página pode não ser servida — teste o recurso no app compilado (ou atrás do
+> proxy).
+
 ## Rodando localmente
 
 Pré-requisitos:
@@ -502,6 +541,7 @@ update.html           # janela de novidades do aviso de atualizacao (OTA)
 CHANGELOG.md          # changelog (fonte das novidades exibidas no app)
 src/
   main.ts             # shell: navegacao entre Envio de dados, Uso atual, Dashboards, Configuracoes e Sobre
+  ipc.ts              # camada de IPC unificada: invoke nativo (Tauri) ou fetch /api/invoke (navegador)
   envio.ts            # tela "Envio de dados" (pausa/envio por provedor, historico)
   usage.ts            # tela "Uso atual" (consome get_usage/force_collect)
   usage-format.ts     # helpers de formatacao/icones compartilhados (uso, reset, cores)
@@ -528,6 +568,7 @@ src-tauri/
     main.rs
     usage_dashboard.rs # coleta as estatisticas do dashboard (Claude, arquivos locais)
     codex_dashboard.rs # historico diario de uso do Codex (API wham, get_codex_stats)
+    http_server.rs     # servidor HTTP opcional: serve os dashboards no navegador com PIN (somente leitura)
     taskbar_widget.rs  # widget da barra de tarefas (somente Windows)
   tauri.conf.json
   tauri.windows.conf.json

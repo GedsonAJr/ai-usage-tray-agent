@@ -3,7 +3,7 @@
 // dados vêm de uma chamada de rede (analytics do backend do ChatGPT) pelo comando
 // IPC `get_codex_stats`, e a unidade é PERCENTUAL de uso diário (não tokens).
 // A tela carrega ao abrir e refaz a chamada ao trocar o período (30d/7d).
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { escapeHtml } from "./usage-format";
 
 interface ModelUsage {
