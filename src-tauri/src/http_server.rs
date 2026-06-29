@@ -395,22 +395,22 @@ fn login_page(erro: bool) -> String {
   :root {{ color-scheme: dark; }}
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #11131a; color: #e8eaf0; }}
-  .card {{ width: min(360px, 92vw); background: #1a1d27; border: 1px solid #2a2e3c;
-    border-radius: 14px; padding: 28px 26px; box-shadow: 0 12px 40px rgba(0,0,0,.4); }}
-  h1 {{ margin: 0 0 4px; font-size: 18px; }}
-  p {{ margin: 0 0 20px; color: #9aa0b3; font-size: 13px; }}
-  label {{ display: block; font-size: 12px; color: #9aa0b3; margin-bottom: 6px; }}
-  input {{ width: 100%; padding: 11px 12px; font-size: 16px; border-radius: 9px;
-    border: 1px solid #343a4d; background: #11131a; color: #e8eaf0; outline: none; }}
-  input:focus {{ border-color: #5b7cfa; }}
-  button {{ width: 100%; margin-top: 16px; padding: 11px; font-size: 14px; font-weight: 600;
-    border: 0; border-radius: 9px; background: #5b7cfa; color: #fff; cursor: pointer; }}
-  button:hover {{ background: #4a6bf0; }}
-  .erro {{ margin: 0 0 14px; padding: 9px 11px; border-radius: 8px; font-size: 13px;
-    background: #3a1d22; border: 1px solid #5e2a31; color: #f3b5bd; }}
-  .brand {{ font-weight: 700; letter-spacing: .3px; color: #5b7cfa; margin-bottom: 14px; }}
+    font: 15px/1.4 "Segoe UI", system-ui, sans-serif;
+    background: #1a1915; color: #e8e6e1; }}
+  .card {{ width: min(360px, 92vw); background: #232220; border: 1px solid #34322d;
+    border-radius: 14px; padding: 28px 26px; box-shadow: 0 16px 40px rgba(0,0,0,.5); }}
+  .brand {{ font-size: 17px; font-weight: 600; color: #d97757; margin-bottom: 16px; }}
+  h1 {{ margin: 0 0 4px; font-size: 20px; font-weight: 600; }}
+  p {{ margin: 0 0 20px; color: #9a968d; font-size: 13px; }}
+  label {{ display: block; font-size: 14px; color: #c9c5bc; margin-bottom: 6px; }}
+  input {{ width: 100%; padding: 9px 11px; font: inherit; font-size: 15px; border-radius: 9px;
+    border: 1px solid #3a3833; background: #1c1b18; color: #e8e6e1; outline: none; }}
+  input:focus {{ border-color: #d97757; }}
+  button {{ width: 100%; margin-top: 18px; padding: 10px; font: inherit; font-size: 14px; font-weight: 600;
+    border: 1px solid #d97757; border-radius: 9px; background: #d97757; color: #1a1915; cursor: pointer; }}
+  button:hover {{ background: #e08a6d; }}
+  .erro {{ margin: 0 0 14px; padding: 9px 11px; border-radius: 9px; font-size: 13px;
+    background: #2c211d; border: 1px solid #5a3a30; color: #e0a890; }}
 </style>
 </head>
 <body>
