@@ -2,7 +2,7 @@
 // Os dados vêm do backend Rust pelo comando IPC `get_stats` (antes era um
 // fetch a um servidor HTTP local). A lógica de render é a mesma do painel
 // original (cards, heatmap, gráfico de modelos), só tipada em TypeScript.
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import { escapeHtml } from "./usage-format";
 
 interface ModelTotals {

@@ -27,6 +27,7 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 ## [Não lançado]
 
 ### Adicionado
+- Configurações: nova aba **Servidor** para abrir os dashboards de uso no navegador, protegidos por um **PIN** (endereço, porta e PIN configuráveis; somente leitura — não expõe Configurações, Envio nem credenciais).
 - Widget: novo seletor **Modo de exibição** com **Completo** (cards com barras, o atual), **Mínimo** (uma linha por provedor) e **Anel duplo** (anéis de progresso, sessão no anel externo e semanal no interno).
 - Widget: opção **Nenhum** no formato do reset, que oculta o tempo/horário de reset em todos os modos.
 

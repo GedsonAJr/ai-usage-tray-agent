@@ -260,7 +260,7 @@ fn load_baseline(claude_dir: &Path) -> Option<Baseline> {
     })
 }
 
-fn collect_stats() -> Value {
+pub(crate) fn collect_stats() -> Value {
     let started = Instant::now();
     let Some(claude_dir) = claude_dir() else {
         return json!({ "error": "home dir nao encontrada" });

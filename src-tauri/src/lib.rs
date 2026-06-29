@@ -13,6 +13,7 @@ use std::{
 };
 
 mod codex_dashboard;
+mod http_server;
 mod usage_dashboard;
 
 #[cfg(target_os = "windows")]
@@ -50,6 +51,36 @@ struct AppConfig {
     barra_tarefas: TaskbarConfig,
     widget: WidgetConfig,
     envio: EnvioConfig,
+    servidor: ServerConfig,
+}
+
+/// Servidor HTTP local (opcional) que serve os dashboards de uso pelo navegador,
+/// protegido por PIN. Acesso somente leitura (uso atual + dashboards); nunca expoe
+/// Configuracoes/Envio nem credenciais. HTTPS, se desejado, fica a cargo de um
+/// proxy externo (ex.: Cloudflare). Ver `http_server.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct ServerConfig {
+    /// Liga/desliga o servidor. Padrao desligado.
+    habilitado: bool,
+    /// Endereco de bind. "127.0.0.1" (padrao) so' aceita conexoes locais;
+    /// "0.0.0.0" aceita da rede (use atras de um proxy/tunel com TLS).
+    host: String,
+    /// Porta TCP do servidor (padrao 8770).
+    porta: u16,
+    /// PIN de acesso. Vazio mantem o servidor desligado mesmo com `habilitado`.
+    pin: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: false,
+            host: "127.0.0.1".to_string(),
+            porta: 8770,
+            pin: String::new(),
+        }
+    }
 }
 
 /// Controle do envio das metricas ao Loki. E' independente da coleta: a coleta
@@ -444,6 +475,7 @@ impl Default for AppConfig {
             barra_tarefas: TaskbarConfig::default(),
             widget: WidgetConfig::default(),
             envio: EnvioConfig::default(),
+            servidor: ServerConfig::default(),
         }
     }
 }
@@ -574,6 +606,9 @@ pub fn run() {
             refresh_tray(app.handle(), &shared)?;
             start_worker(app.handle().clone(), paths.clone(), shared.clone());
 
+            // Sobe o servidor HTTP dos dashboards se estiver habilitado na config.
+            http_server::apply(app.handle());
+
             // Checagem de atualizacao no boot, em segundo plano. Silenciosa quando
             // nao ha update; se houver, pergunta antes de baixar/instalar.
             let update_handle = app.handle().clone();
@@ -673,6 +708,9 @@ fn save_settings(
     write_config(paths.inner(), &config)
         .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
     apply_autostart(&app, settings.autostart);
+    // (Re)aplica o servidor HTTP dos dashboards: liga/desliga e re-bind conforme o
+    // host/porta/PIN recem-salvos (idempotente; invalida sessoes antigas).
+    http_server::apply(&app);
     Ok(settings_value(&app, paths.inner()))
 }
 
@@ -2523,6 +2561,12 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
 fn normalize_config(config: &mut AppConfig) {
     config.intervalo_segundos = config.intervalo_segundos.clamp(5, 3600);
     config.widget.opacidade = config.widget.opacidade.clamp(0, 100);
+    if config.servidor.host.trim().is_empty() {
+        config.servidor.host = "127.0.0.1".to_string();
+    }
+    if config.servidor.porta == 0 {
+        config.servidor.porta = 8770;
+    }
 }
 
 /// Le e normaliza (clamp) o config.json SEM o round-trip de `Value` nem reescrita

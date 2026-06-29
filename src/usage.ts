@@ -3,7 +3,7 @@
 // e a data/hora exata do reset. Os dados vêm do comando IPC `get_usage`, que lê
 // o mesmo snapshot usado pelo tray e pela barra de tarefas (sem rede). O botão
 // "Atualizar agora" chama `force_collect`, que força uma coleta nova.
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./ipc";
 import {
   barColor,
   escapeHtml,
