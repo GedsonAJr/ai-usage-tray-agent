@@ -191,19 +191,135 @@ svg text { fill: #9a968d; font-size: 11px; }
 
 /* ===== Configurações ===== */
 .sub { color: #9a968d; font-size: 14px; margin: 3px 0 0; }
-.settings-tabs { margin-bottom: 4px; flex-wrap: wrap; }
+.settings-tabs { padding-bottom: 14px; border-bottom: 1px solid #34322d; margin-bottom: 16px; flex-wrap: wrap; }
 .stab { display: none; padding-top: 6px; }
 .stab.on { display: block; }
 .hint { color: #9a968d; font-size: 13px; margin: 0 0 14px; }
 .field { margin-bottom: 16px; }
 .field > label:not(.check) { display: block; font-size: 14px; color: #c9c5bc; margin-bottom: 6px; }
 .field .desc { color: #807c74; font-size: 12.5px; margin-top: 5px; }
+.req { color: #d97757; font-weight: 600; font-size: 12px; }
+.field-warn { margin-top: 7px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; background: #2c211d; border: 1px solid #5a3a30; color: #e0a890; }
 input[type=text], input[type=number], input[type=password], select {
   width: 100%; background: #1c1b18; border: 1px solid #3a3833; border-radius: 9px;
   color: #e8e6e1; font: inherit; font-size: 14px; padding: 9px 11px; }
 input:focus, select:focus { outline: none; border-color: #d97757; }
+/* Chevron custom do select: o nativo fica colado na borda. Deixa espaco a direita. */
+select {
+  appearance: none; -webkit-appearance: none;
+  padding-right: 34px;
+  background-color: #1c1b18;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239a968d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 13px center;
+  background-size: 11px;
+}
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 .row > .field { flex: 1; min-width: 130px; }
+/* Cabecalho de subgrupo dentro de uma aba de configuracoes (Provedores, Posicao, etc.). */
+.set-group { margin: 0 0 12px; padding-top: 14px; border-top: 1px solid #2a2926; color: #e8e6e1; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.stab > .set-group:first-child, .pv + .set-group { padding-top: 2px; border-top: none; }
+
+/* Cabecalho de destaque do provedor (abas Codex/Claude): logo + nome + um toggle
+   mestre que liga/desliga a coleta daquele provedor. */
+.provider-card { margin-bottom: 18px; border: 1px solid #3a3833; border-radius: 12px; background: #201f1c; }
+.provider-head { display: flex; align-items: center; gap: 13px; padding: 13px 15px; }
+/* Corpo com os campos do provedor: desabilitado/esmaecido quando o provedor está desativado. */
+.provider-body { padding: 0 15px 14px; display: flex; flex-direction: column; gap: 14px; }
+.provider-body > .field { margin-bottom: 0; }
+.provider-body.is-off { opacity: .45; }
+.provider-body input:disabled, .provider-body button:disabled { cursor: not-allowed; }
+/* Texto do toggle de provedor com nome + nota opcional (ex.: aba Envio). */
+.prov-toggle-text { margin-right: auto; display: flex; flex-direction: column; gap: 2px; }
+.prov-toggle-text .prov-toggle-name { margin-right: 0; }
+.prov-toggle-note { font-size: 12px; color: #d9b78a; }
+.provider-logo { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: #2a2926; }
+.provider-logo .spark { font-size: 24px; line-height: 1; }
+.provider-title { margin-right: auto; }
+.provider-name { font-size: 16px; font-weight: 700; color: #f2f0ea; line-height: 1.2; }
+.provider-sub { font-size: 12.5px; color: #807c74; margin-top: 2px; }
+/* Toggle deslizante (on/off). O <input> fica visualmente oculto mas funcional. */
+.switch { position: relative; flex: none; display: inline-flex; align-items: center; cursor: pointer; }
+.switch input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.switch-track { position: relative; width: 46px; height: 26px; border-radius: 13px; background: #46433d; transition: background .15s ease; }
+.switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #e8e6e1; transition: transform .15s ease; }
+.switch input:checked + .switch-track { background: #d97757; }
+.switch input:checked + .switch-track::after { transform: translateX(20px); }
+.switch input:focus-visible + .switch-track { outline: 2px solid #d97757; outline-offset: 2px; }
+/* Toggle de provedor com logo (abas Barra/Widget): destaca o que sera' exibido e
+   fica logo abaixo da miniatura, integrando-se a ela. */
+.prov-toggles { display: flex; flex-direction: column; gap: 10px; }
+.prov-toggle { display: flex; align-items: center; gap: 11px; padding: 11px 13px; border: 1px solid #3a3833; border-radius: 11px; background: #201f1c; cursor: pointer; user-select: none; }
+.prov-toggle .provider-logo { width: 32px; height: 32px; }
+.prov-toggle .provider-logo .spark { font-size: 20px; }
+.prov-toggle-name { margin-right: auto; font-size: 15px; font-weight: 600; color: #f2f0ea; }
+
+/* Previews ilustrativos (estilo "Aparencia" do macOS) do topo das abas Barra/Widget:
+   miniaturas em close-up focadas no proprio elemento, nao na tela inteira. */
+.pv { margin: 0; }
+/* Layout: miniatura a esquerda, toggles de provedor empilhados a direita. */
+.pv-layout { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 2px 0 22px; }
+.pv-layout > .pv { flex: 0 0 210px; max-width: 210px; }
+.pv-layout > .prov-toggles { flex: 1 1 200px; }
+
+/* Barra de tarefas: mini "tela" com um pouco de area de trabalho e a barra na base. */
+.pv-screen { position: relative; width: 100%; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; border: 1px solid #46433d; background: linear-gradient(150deg, #274a63 0%, #3d6079 45%, #6a5f93 100%); }
+.pv-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 24px; padding: 0 7px; background: rgba(16, 15, 13, .9); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pv-menu { display: flex; align-items: center; gap: 5px; }
+.pv-right { display: flex; align-items: center; gap: 8px; }
+.pv-app { width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px #ffffff22; }
+.pv-app.a1 { background: #d9775766; }
+.pv-app.a2 { background: #5aa7ff55; }
+.pv-widget { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 2px 5px; border-radius: 4px; box-shadow: 0 0 0 1.5px #d97757; }
+.pv-widget b { font-size: 7px; font-weight: 600; color: #fff; line-height: 1.1; }
+.pv-widget em { font-size: 7px; font-style: normal; color: #d7d3cb; line-height: 1.1; }
+.pv-tray { display: flex; align-items: center; gap: 4px; }
+.pv-tray i { width: 4px; height: 4px; border-radius: 50%; background: #cfcabf; }
+.pv-clock { font-size: 7px; color: #eceae5; letter-spacing: .02em; }
+
+/* Seletor de modo do widget: 3 miniaturas lado a lado, cada uma desenhando o
+   widget no respectivo modo; clicar seleciona o modo. */
+.pv-modes { display: flex; gap: 12px; margin: 2px 0 16px; }
+.pv-mode { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; }
+.pv-mode > input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.pv-mode .pv { width: 100%; }
+.pv-mode .pv-screen { border-width: 2px; }
+.pv-mode > input:checked ~ .pv .pv-screen { border-color: #d97757; box-shadow: 0 0 0 2px rgba(217, 119, 87, .35); }
+.pv-mode > input:focus-visible ~ .pv .pv-screen { border-color: #d97757; }
+.pv-mode-name { font-size: 12px; color: #9a968d; }
+.pv-mode > input:checked ~ .pv-mode-name { color: #f2f0ea; font-weight: 600; }
+
+/* Widget flutuante desenhado dentro da mini-tela (logo acima da barra), tentando
+   reproduzir cada modo real (completo / minimo / anel duplo). */
+.pv-desk-widget { position: absolute; right: 5px; bottom: 27px; width: 92px; padding: 5px 6px; border-radius: 7px; background: rgba(26, 25, 22, .96); box-shadow: 0 5px 12px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 5px; z-index: 1; }
+.pv-ico { flex: none; width: 10px; height: 10px; }
+svg.pv-ico { display: block; }
+.pv-ico.spark { display: inline-grid; place-items: center; font-size: 9px; color: #d97757; }
+.pv-track { display: block; height: 4px; border-radius: 3px; background: #3a3833; overflow: hidden; }
+.pv-track i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #d97757, #e59a7d); }
+/* completo: por provedor, cabecalho (logo + nome) + barra. */
+.pv-wprov { display: flex; flex-direction: column; gap: 2px; }
+.pv-whead { display: flex; align-items: center; gap: 3px; }
+.pv-whead b { font-size: 7px; font-weight: 600; color: #eceae5; }
+/* minimo: uma linha por provedor (logo + nome + %). */
+.pv-wmin { display: flex; align-items: center; gap: 3px; }
+.pv-wmin b { font-size: 7px; font-weight: 600; color: #eceae5; margin-right: auto; }
+.pv-wmin em { font-size: 7px; font-style: normal; color: #cfcbc2; }
+/* anel duplo: aneis concentricos + icone central + legenda. */
+.pv-wg-anel { flex-direction: row; align-items: center; justify-content: center; gap: 6px; width: auto; }
+.pv-rings { position: relative; flex: none; }
+.pv-rings svg { display: block; width: 34px; height: 34px; }
+.pv-rings-ico { position: absolute; inset: 0; display: grid; place-items: center; font-size: 9px; color: #d97757; }
+.pv-anel-leg { display: flex; flex-direction: column; gap: 3px; }
+.pv-anel-leg > span { display: flex; align-items: center; gap: 3px; font-size: 7px; color: #cfcbc2; }
+.pv-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; }
+
+/* Toggles de provedor em linha (abaixo das miniaturas de modo). */
+.prov-toggles-row { margin-bottom: 18px; }
+/* Seção com mais respiro entre os itens (ex.: Aparência do widget). */
+.set-roomy { display: flex; flex-direction: column; gap: 22px; margin-bottom: 16px; }
+.set-roomy > .field { margin-bottom: 0; }
+.prov-toggles-row > .prov-toggle { flex: 1 1 0; }
 .check { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
 .check input { width: 18px; height: 18px; accent-color: #d97757; flex: none; cursor: pointer; margin: 0; }
 .check span { font-size: 14px; color: #e8e6e1; }

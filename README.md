@@ -150,7 +150,7 @@ Itens do menu:
 
 > A exibição de cada IA na barra de tarefas e a inicialização automática não são
 > itens do tray; são editadas nas **Configurações** do app (abas Barra de
-> tarefas e Sistema).
+> tarefas e Geral).
 
 ## Janela do app (Envio de dados, Uso atual, Dashboard Claude, Dashboard Codex, Configurações e Sobre)
 
@@ -183,7 +183,7 @@ e na barra mesmo com o envio pausado/desabilitado. Traz:
   tooltip da linha. Botão **Limpar** zera a lista.
 
 O liga/desliga do envio **por provedor** (`envio.claude`, `envio.codex`) fica nas
-**Configurações**, na aba de cada provedor (opção "Enviar ao Loki"). Tudo em
+**Configurações**, na aba **Envio** (opção "Enviar ao Loki" por provedor). Tudo em
 `envio` é **persistido no `config.json`**; a pausa geral é gerenciada por esta
 tela e o painel de **Configurações** preserva esse bloco (editar configurações
 não reativa o envio nem tira a pausa). O histórico tem altura limitada e **rola
@@ -240,32 +240,35 @@ Rust). A unidade é percentual de uso diário (não tokens absolutos).
 Formulário com **abas** que cobre **todas as opções do `config.json`** (mais o
 "iniciar com o sistema"):
 
-- **Geral**: `usuario`, `intervaloSegundos`, `loki.url`.
-- **Codex**: `habilitado`, **Enviar ao Loki** (`envio.codex`), `authJsonPath`.
-- **Claude**: `habilitado`, **Enviar ao Loki** (`envio.claude`), `organizationId`,
-  `cookie` (com mostrar/ocultar).
+- **Geral**: `intervaloSegundos` e **Iniciar com o sistema** (autostart) — o
+  autostart não fica no `config.json`, é gerenciado pelo `tauri-plugin-autostart`.
+- **Envio**: `usuario` (Nome de exibição), `loki.url` e o **Enviar ao Loki** por
+  provedor (`envio.codex`, `envio.claude`, como interruptores) — avisa quando o
+  provedor está desativado ou sem credenciais, mas o interruptor segue operável.
+- **Codex**: `habilitado` (interruptor de destaque com o logo) e `authJsonPath`.
+- **Claude**: `habilitado` (interruptor de destaque com o logo), `organizationId`
+  e `cookie` (com mostrar/ocultar) — os campos ficam esmaecidos quando o provedor
+  está desativado.
 - **Barra de tarefas** (Windows): exibir cada provedor na barra
   (`providers.<ia>.mostraNaTaskbarWindows`), `lado`, `deslocamento`,
   `tamanhoFonte`, `corFonte` (com seletor de cor), `formatoReset` (tempo
   restante ou hora/data exata) e `janelas` (quais janelas exibir).
-- **Widget**: liga o widget da área de trabalho e configura o que ele mostra —
-  `habilitado`, `mostraClaude`, `mostraCodex`, `sempreNaFrente`, `modo` (Completo,
-  Mínimo ou Anel duplo), `janelas`, `formatoReset` (tempo restante, hora/data
-  exata ou nenhum), imagem/gif de `fundo` (com seletor de arquivo) e `opacidade`
-  do painel.
+- **Widget**: exibe o widget da área de trabalho — aparece quando ao menos um
+  provedor está marcado (`mostraClaude`/`mostraCodex`) — e configura o que ele
+  mostra: `sempreNaFrente`, `modo` (Completo, Mínimo ou Anel duplo, escolhido por
+  miniaturas), `janelas`, `formatoReset` (tempo restante, hora/data exata ou
+  nenhum), imagem/gif de `fundo` (com seletor de arquivo) e `opacidade` do painel.
 - **Servidor**: liga o **servidor HTTP dos dashboards** (ver seção abaixo) —
   `habilitado`, `host` (apenas local `127.0.0.1` ou rede `0.0.0.0`), `porta` e
-  `pin` de acesso (com mostrar/ocultar).
-- **Sistema**: **Iniciar com o sistema** (autostart) — não fica no `config.json`,
-  é gerenciado pelo `tauri-plugin-autostart`.
+  `pin` de acesso obrigatório (com mostrar/ocultar).
 
 Não há botão "Salvar": as alterações têm **auto-save** (com debounce) — qualquer
 mudança grava o `config.json` sozinha (com normalização: clamp de intervalo/fonte,
 validação de cor) e o app aplica tudo em ~1s, **sem reiniciar e sem disparar um
 envio extra** ao Loki. O autostart é aplicado na hora. Os valores são relidos do
-disco ao reabrir a tela. A opção **Enviar ao Loki** (Codex/Claude) é gravada à
-parte (via `set_envio_provider`), fora do auto-save, para preservar o bloco
-`envio` gerenciado pela tela **Envio de dados**.
+disco ao reabrir a tela. A opção **Enviar ao Loki** por provedor (aba Envio) é
+gravada à parte (via `set_envio_provider`), fora do auto-save, para preservar o
+bloco `envio` gerenciado pela tela **Envio de dados**.
 
 ### Sobre
 
@@ -286,7 +289,7 @@ Tela dedicada (última opção do menu lateral). Mostra:
 O app usa o `tauri-plugin-autostart` (chave `HKCU\...\Run` no Windows) e vem
 **habilitado por padrão na primeira execução**. Depois disso:
 
-- O estado é controlado pela opção **Iniciar com o sistema** na aba **Sistema**
+- O estado é controlado pela opção **Iniciar com o sistema** na aba **Geral**
   das Configurações.
 - Se continuar ligado, o caminho do executável é reaplicado a cada início
   (evita apontar para um caminho antigo após atualizar/reinstalar).

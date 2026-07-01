@@ -91,14 +91,13 @@ function fillForm(data: SettingsData): void {
   $<HTMLSelectElement>("set-barraJanelas").value = normJanelas(barra.janelas);
   syncColorPicker();
 
-  $<HTMLInputElement>("set-wdgHab").checked = !!widget?.habilitado;
   $<HTMLInputElement>("set-wdgClaude").checked = widget?.mostraClaude !== false;
   $<HTMLInputElement>("set-wdgCodex").checked = widget?.mostraCodex !== false;
   $<HTMLInputElement>("set-wdgTopo").checked = widget?.sempreNaFrente !== false;
   $<HTMLInputElement>("set-wdgFundo").value = widget?.fundo ?? "";
   $<HTMLSelectElement>("set-wdgJanelas").value = normJanelas(widget?.janelas);
   $<HTMLSelectElement>("set-wdgFormatoReset").value = normResetMode(widget?.formatoReset);
-  $<HTMLSelectElement>("set-wdgModo").value = normModo(widget?.modo);
+  setWdgModo(widget?.modo);
   $<HTMLInputElement>("set-wdgOpac").value = String(widget?.opacidade ?? 90);
   syncOpacLabel();
 
@@ -106,6 +105,8 @@ function fillForm(data: SettingsData): void {
   $<HTMLSelectElement>("set-srvHost").value = servidor?.host === "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
   $<HTMLInputElement>("set-srvPorta").value = String(servidor?.porta ?? 8770);
   $<HTMLInputElement>("set-srvPin").value = servidor?.pin ?? "";
+  syncServerPinHint();
+  syncProviderHints();
 
   $<HTMLInputElement>("set-autostart").checked = !!data.autostart;
   if (data.autostartLabel) $("set-autostartLabel").textContent = data.autostartLabel;
@@ -149,7 +150,9 @@ function collect(): SaveSettings {
       janelas: $<HTMLSelectElement>("set-barraJanelas").value,
     },
     widget: {
-      habilitado: $<HTMLInputElement>("set-wdgHab").checked,
+      // O widget aparece quando ao menos um provedor esta marcado; nao ha mais
+      // um checkbox separado de "mostrar widget".
+      habilitado: $<HTMLInputElement>("set-wdgClaude").checked || $<HTMLInputElement>("set-wdgCodex").checked,
       mostraClaude: $<HTMLInputElement>("set-wdgClaude").checked,
       mostraCodex: $<HTMLInputElement>("set-wdgCodex").checked,
       fundo: $<HTMLInputElement>("set-wdgFundo").value.trim(),
@@ -157,7 +160,7 @@ function collect(): SaveSettings {
       opacidade,
       janelas: $<HTMLSelectElement>("set-wdgJanelas").value,
       formatoReset: $<HTMLSelectElement>("set-wdgFormatoReset").value,
-      modo: $<HTMLSelectElement>("set-wdgModo").value,
+      modo: getWdgModo(),
     },
     servidor: {
       habilitado: $<HTMLInputElement>("set-srvHab").checked,
@@ -195,6 +198,19 @@ function normResetMode(value: string | undefined): "restante" | "exato" | "nenhu
 /// (default "completo").
 function normModo(value: string | undefined): "completo" | "minimo" | "anelduplo" {
   return value === "minimo" || value === "anelduplo" ? value : "completo";
+}
+
+/// Lê/grava o modo de exibição do widget pelo grupo de radios das miniaturas
+/// (cada miniatura desenha o widget no respectivo modo e seleciona ao clicar).
+function getWdgModo(): string {
+  const checked = document.querySelector<HTMLInputElement>('input[name="wdgModo"]:checked');
+  return normModo(checked?.value);
+}
+function setWdgModo(value: string | undefined): void {
+  const mode = normModo(value);
+  document.querySelectorAll<HTMLInputElement>('input[name="wdgModo"]').forEach((radio) => {
+    radio.checked = radio.value === mode;
+  });
 }
 
 /// Abre o seletor de arquivo nativo (no backend) e joga o caminho escolhido no
@@ -298,6 +314,62 @@ async function autoSave(): Promise<void> {
   }
 }
 
+/// Mostra o aviso de PIN obrigatório quando o servidor está habilitado mas sem
+/// PIN — deixa claro que, sem PIN, ele não inicia.
+function syncServerPinHint(): void {
+  const habilitado = $<HTMLInputElement>("set-srvHab").checked;
+  const semPin = $<HTMLInputElement>("set-srvPin").value.trim() === "";
+  ($("set-srvPinWarn") as HTMLElement).hidden = !(habilitado && semPin);
+}
+
+/// Habilita/desabilita (e esmaece) o corpo de campos de um provedor conforme ele
+/// esteja ligado. Os valores continuam legíveis para o save; só não são editáveis.
+function setBodyEnabled(bodyId: string, on: boolean): void {
+  const body = $(bodyId);
+  body.classList.toggle("is-off", !on);
+  body.querySelectorAll("input, button").forEach((el) => {
+    (el as HTMLInputElement | HTMLButtonElement).disabled = !on;
+  });
+}
+
+/// Reflete o estado de cada provedor: desabilita os campos quando desligado e, se
+/// ligado, avisa que faltam os campos obrigatórios para a coleta acontecer
+/// (Codex: auth.json; Claude: organization id + cookie).
+function syncProviderHints(): void {
+  const codexOn = $<HTMLInputElement>("set-codexHab").checked;
+  setBodyEnabled("set-codexBody", codexOn);
+  const codexFalta = $<HTMLInputElement>("set-codexAuth").value.trim() === "";
+  ($("set-codexWarn") as HTMLElement).hidden = !(codexOn && codexFalta);
+
+  const claudeOn = $<HTMLInputElement>("set-claudeHab").checked;
+  setBodyEnabled("set-claudeBody", claudeOn);
+  const claudeFalta =
+    $<HTMLInputElement>("set-claudeOrg").value.trim() === "" ||
+    $<HTMLInputElement>("set-claudeCookie").value.trim() === "";
+  ($("set-claudeWarn") as HTMLElement).hidden = !(claudeOn && claudeFalta);
+
+  syncEnvioNotes();
+}
+
+/// Nota por provedor na aba Envio: se o provedor está desativado ou sem
+/// credenciais, avisa que nada será enviado — mas o toggle segue operável.
+function setEnvioNote(id: string, habilitado: boolean, configurado: boolean): void {
+  const note = $(id) as HTMLElement;
+  let msg = "";
+  if (!habilitado) msg = "Provedor desativado — não há dados para enviar.";
+  else if (!configurado) msg = "Sem credenciais — não há dados para enviar.";
+  note.textContent = msg;
+  note.hidden = msg === "";
+}
+function syncEnvioNotes(): void {
+  const codexCfg = $<HTMLInputElement>("set-codexAuth").value.trim() !== "";
+  setEnvioNote("envio-codex-note", $<HTMLInputElement>("set-codexHab").checked, codexCfg);
+  const claudeCfg =
+    $<HTMLInputElement>("set-claudeOrg").value.trim() !== "" &&
+    $<HTMLInputElement>("set-claudeCookie").value.trim() !== "";
+  setEnvioNote("envio-claude-note", $<HTMLInputElement>("set-claudeHab").checked, claudeCfg);
+}
+
 function activateTab(tab: string): void {
   document.querySelectorAll(".settings-tabs button").forEach((b) =>
     b.classList.toggle("on", (b as HTMLElement).dataset.stab === tab));
@@ -328,6 +400,13 @@ export function initSettings(): void {
     input.type = show ? "text" : "password";
     $("set-srvPinToggle").textContent = show ? "Ocultar" : "Mostrar";
   });
+  $("set-srvHab").addEventListener("change", syncServerPinHint);
+  $("set-srvPin").addEventListener("input", syncServerPinHint);
+  $("set-codexHab").addEventListener("change", syncProviderHints);
+  $("set-codexAuth").addEventListener("input", syncProviderHints);
+  $("set-claudeHab").addEventListener("change", syncProviderHints);
+  $("set-claudeOrg").addEventListener("input", syncProviderHints);
+  $("set-claudeCookie").addEventListener("input", syncProviderHints);
   $("set-barraCor").addEventListener("input", syncColorPicker);
   $("set-barraCorPicker").addEventListener("input", () => {
     $<HTMLInputElement>("set-barraCor").value = $<HTMLInputElement>("set-barraCorPicker").value;
