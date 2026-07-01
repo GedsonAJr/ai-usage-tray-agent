@@ -26,6 +26,22 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Adicionado
+- Configurações → Barra de tarefas e Widget: miniatura ilustrativa de como o widget aparece e onde fica na tela.
+- Configurações → Widget: seletor do modo de exibição (Completo, Mínimo e Anel duplo) com uma prévia de cada modo — clicar na miniatura escolhe o modo.
+
+### Alterado
+- Configurações: nova aba **Envio** reúne o nome de exibição, a URL do Loki e o "Enviar ao Loki" de cada provedor (agora como interruptores, com aviso quando o provedor está desativado ou sem credenciais).
+- Configurações → Codex e Claude: cada provedor virou um card com o logo e um interruptor para ativar/desativar a coleta; os campos de credenciais ficam esmaecidos quando o provedor está desativado.
+- Configurações → Geral: a opção "Iniciar com o sistema" passou para esta aba (rótulo unificado em todos os sistemas operacionais).
+- Configurações → Widget: o widget passa a aparecer quando ao menos um provedor está marcado (o interruptor separado "Mostrar widget na área de trabalho" foi removido).
+- Configurações: os campos obrigatórios de cada provedor e o PIN do servidor agora são sinalizados como obrigatórios, com um aviso quando faltam para a coleta/servidor funcionar.
+
+### Removido
+- Configurações: aba **Sistema** — a opção "Iniciar com o sistema" foi para a aba Geral.
+
+## [0.2.42] - 2026-06-30
+
 ### Alterado
 - Envio de dados: a **contagem regressiva** do próximo envio passou para o **subtítulo da página** (como o "Atualizado há…" do Uso atual), e o histórico de envios ganhou um divisor abaixo do título.
 - Janela de atualização: visual mais limpo — sem a seta ao lado do título e sem o sufixo "Atualização disponível" na barra de título da janela.

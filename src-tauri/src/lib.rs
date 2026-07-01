@@ -657,11 +657,7 @@ fn settings_value<R: Runtime>(app: &AppHandle<R>, paths: &RuntimePaths) -> Value
 }
 
 fn autostart_label() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "Iniciar com o Windows"
-    } else {
-        "Iniciar com o sistema"
-    }
+    "Iniciar com o sistema"
 }
 
 /// Liga/desliga o autostart so' quando o estado pedido difere do atual.

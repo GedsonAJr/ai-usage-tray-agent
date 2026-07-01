@@ -145,90 +145,184 @@
           <div class="panel">
             <div class="tabs settings-tabs">
               <button class="on" data-stab="geral">Geral</button>
+              <button data-stab="envio">Envio</button>
               <button data-stab="codex">Codex</button>
               <button data-stab="claude">Claude</button>
               <button data-stab="barra">Barra de tarefas</button>
               <button data-stab="widget">Widget</button>
               <button data-stab="servidor">Servidor</button>
-              <button data-stab="sistema">Sistema</button>
             </div>
 
             <div id="settings-loading" class="loading">Carregando configurações…</div>
 
             <div id="settings-form" hidden>
+              <!-- Gradiente do logo do Codex, definido uma vez e reusado pelas
+                   miniaturas do widget (evita repetir <defs> em cada ícone). -->
+              <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+                <linearGradient id="codexg" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/><stop offset="1" stop-color="#3a3fe6"/>
+                </linearGradient>
+              </defs></svg>
               <!-- Geral -->
               <div class="stab on" data-spanel="geral">
-                <p class="hint">Identificação e cadência de coleta/envio.</p>
-                <div class="row">
-                  <div class="field">
-                    <label for="set-usuario">Usuário</label>
-                    <input type="text" id="set-usuario" placeholder="seu-usuario">
-                    <div class="desc">Rótulo <code>usuario</code> enviado ao Loki. Vazio vira "desconhecido".</div>
-                  </div>
-                  <div class="field">
-                    <label for="set-intervalo">Intervalo de coleta (s)</label>
-                    <input type="number" id="set-intervalo" min="5" max="3600" step="1">
-                    <div class="desc">Entre 5 e 3600. Período entre coletas/envios.</div>
-                  </div>
+                <div class="field">
+                  <label for="set-intervalo">Intervalo de coleta (s)</label>
+                  <input type="number" id="set-intervalo" min="5" max="3600" step="1">
+                  <div class="desc">Entre 5 e 3600. Período entre coletas/envios.</div>
+                </div>
+                <div class="field">
+                  <label class="check"><input type="checkbox" id="set-autostart"><span id="set-autostartLabel">Iniciar com o sistema</span></label>
+                  <div class="desc">Inicia o app automaticamente no login.</div>
+                </div>
+              </div>
+
+              <!-- Envio -->
+              <div class="stab" data-spanel="envio">
+                <div class="field">
+                  <label for="set-usuario">Nome de exibição</label>
+                  <input type="text" id="set-usuario" placeholder="seu-usuario">
+                  <div class="desc">Rótulo <code>usuario</code> enviado ao Loki. Vazio vira "desconhecido".</div>
                 </div>
                 <div class="field">
                   <label for="set-lokiUrl">URL do Loki</label>
                   <input type="text" id="set-lokiUrl" placeholder="http://loki.exemplo.local:3100/loki/api/v1/push">
                   <div class="desc">Endpoint de <code>push</code> do Loki. Vazio desativa o envio.</div>
                 </div>
+
+                <div class="set-group">Enviar ao Loki por provedor</div>
+                <div class="prov-toggles">
+                  <label class="prov-toggle">
+                    <span class="provider-logo">
+                      <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true"><g fill="url(#codexg)"><circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/><circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/><circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/></g><path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/></svg>
+                    </span>
+                    <span class="prov-toggle-text">
+                      <span class="prov-toggle-name">Codex</span>
+                      <span class="prov-toggle-note" id="envio-codex-note" hidden></span>
+                    </span>
+                    <span class="switch"><input type="checkbox" id="set-codexEnviar"><span class="switch-track"></span></span>
+                  </label>
+                  <label class="prov-toggle">
+                    <span class="provider-logo"><span class="spark">✳</span></span>
+                    <span class="prov-toggle-text">
+                      <span class="prov-toggle-name">Claude</span>
+                      <span class="prov-toggle-note" id="envio-claude-note" hidden></span>
+                    </span>
+                    <span class="switch"><input type="checkbox" id="set-claudeEnviar"><span class="switch-track"></span></span>
+                  </label>
+                </div>
               </div>
 
               <!-- Codex -->
               <div class="stab" data-spanel="codex">
-                <p class="hint">Coleta o uso do Codex a partir do <code>auth.json</code>.</p>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-codexHab"><span>Habilitado</span></label>
-                </div>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-codexEnviar"><span>Enviar ao Loki</span></label>
-                  <div class="desc">Envia as métricas deste provedor ao Loki. Não afeta a coleta.</div>
-                </div>
-                <div class="field">
-                  <label for="set-codexAuth">Caminho do auth.json</label>
-                  <input type="text" id="set-codexAuth" placeholder="C:\Users\usuario\.codex\auth.json">
+                <div class="provider-card">
+                  <div class="provider-head">
+                    <span class="provider-logo">
+                      <svg class="pico" width="30" height="30" viewBox="0 0 100 100" aria-hidden="true">
+                        <defs><linearGradient id="codexg-set" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                          <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
+                          <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
+                        <g fill="url(#codexg-set)">
+                          <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
+                          <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
+                          <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
+                        </g>
+                        <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+                        <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
+                      </svg>
+                    </span>
+                    <div class="provider-title">
+                      <div class="provider-name">Codex</div>
+                      <div class="provider-sub">Ativa a coleta de uso deste provedor.</div>
+                    </div>
+                    <label class="switch" title="Habilitar Codex">
+                      <input type="checkbox" id="set-codexHab">
+                      <span class="switch-track"></span>
+                    </label>
+                  </div>
+                  <div class="provider-body" id="set-codexBody">
+                    <div id="set-codexWarn" class="field-warn" hidden>Preencha o caminho do <code>auth.json</code> abaixo para iniciar a coleta.</div>
+                    <div class="field">
+                      <label for="set-codexAuth">Caminho do auth.json <span class="req">(obrigatório)</span></label>
+                      <input type="text" id="set-codexAuth" placeholder="C:\Users\usuario\.codex\auth.json">
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <!-- Claude -->
               <div class="stab" data-spanel="claude">
-                <p class="hint">Coleta o uso do Claude usando <code>organizationId</code> e o cookie de sessão.</p>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-claudeHab"><span>Habilitado</span></label>
-                </div>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-claudeEnviar"><span>Enviar ao Loki</span></label>
-                  <div class="desc">Envia as métricas deste provedor ao Loki. Não afeta a coleta.</div>
-                </div>
-                <div class="field">
-                  <label for="set-claudeOrg">Organization ID</label>
-                  <input type="text" id="set-claudeOrg" placeholder="org_...">
-                </div>
-                <div class="field">
-                  <label for="set-claudeCookie">Cookie de sessão</label>
-                  <div class="inline">
-                    <input type="password" id="set-claudeCookie" placeholder="sessionKey=...">
-                    <button type="button" class="btn btn-show" id="set-cookieToggle">Mostrar</button>
+                <div class="provider-card">
+                  <div class="provider-head">
+                    <span class="provider-logo"><span class="spark">✳</span></span>
+                    <div class="provider-title">
+                      <div class="provider-name">Claude</div>
+                      <div class="provider-sub">Ativa a coleta de uso deste provedor.</div>
+                    </div>
+                    <label class="switch" title="Habilitar Claude">
+                      <input type="checkbox" id="set-claudeHab">
+                      <span class="switch-track"></span>
+                    </label>
                   </div>
-                  <div class="desc">Ex.: <code>sessionKey=...</code>. Se o cookie expirar, atualize aqui.</div>
+                  <div class="provider-body" id="set-claudeBody">
+                    <div id="set-claudeWarn" class="field-warn" hidden>Preencha o Organization ID e o Cookie de sessão abaixo para iniciar a coleta.</div>
+                    <div class="field">
+                      <label for="set-claudeOrg">Organization ID <span class="req">(obrigatório)</span></label>
+                      <input type="text" id="set-claudeOrg" placeholder="org_...">
+                    </div>
+                    <div class="field">
+                      <label for="set-claudeCookie">Cookie de sessão <span class="req">(obrigatório)</span></label>
+                      <div class="inline">
+                        <input type="password" id="set-claudeCookie" placeholder="sessionKey=...">
+                        <button type="button" class="btn btn-show" id="set-cookieToggle">Mostrar</button>
+                      </div>
+                      <div class="desc">Ex.: <code>sessionKey=...</code>. Se o cookie expirar, atualize aqui.</div>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <!-- Barra de tarefas -->
               <div class="stab" data-spanel="barra">
-                <p class="hint">Quais provedores aparecem, aparência e posição do widget desenhado na barra (ignorado em Linux/macOS).</p>
-                <div class="row">
-                  <div class="field">
-                    <label class="check"><input type="checkbox" id="set-codexTaskbar"><span>Mostrar Codex na barra</span></label>
+                <div class="pv-layout">
+                  <div class="pv" aria-hidden="true">
+                    <div class="pv-screen">
+                      <div class="pv-bar">
+                        <div class="pv-menu"><span class="pv-app a1"></span><span class="pv-app a2"></span></div>
+                        <div class="pv-right">
+                          <div class="pv-widget"><b>Claude</b><em>20% | 50%</em></div>
+                          <div class="pv-tray"><i></i><i></i><span class="pv-clock">12:30</span></div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="field">
-                    <label class="check"><input type="checkbox" id="set-claudeTaskbar"><span>Mostrar Claude na barra</span></label>
+                  <div class="prov-toggles">
+                    <label class="prov-toggle">
+                      <span class="provider-logo">
+                        <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+                          <defs><linearGradient id="codexg-bar" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                            <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
+                            <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
+                          <g fill="url(#codexg-bar)">
+                            <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
+                            <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
+                            <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
+                          </g>
+                          <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+                          <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
+                        </svg>
+                      </span>
+                      <span class="prov-toggle-name">Codex</span>
+                      <span class="switch"><input type="checkbox" id="set-codexTaskbar"><span class="switch-track"></span></span>
+                    </label>
+                    <label class="prov-toggle">
+                      <span class="provider-logo"><span class="spark">✳</span></span>
+                      <span class="prov-toggle-name">Claude</span>
+                      <span class="switch"><input type="checkbox" id="set-claudeTaskbar"><span class="switch-track"></span></span>
+                    </label>
                   </div>
                 </div>
+
+                <div class="set-group">Posição</div>
                 <div class="row">
                   <div class="field">
                     <label for="set-barraLado">Lado</label>
@@ -243,6 +337,8 @@
                     <div class="desc">Negativo desloca para a <strong>esquerda</strong>; positivo, para a <strong>direita</strong>.</div>
                   </div>
                 </div>
+
+                <div class="set-group">Aparência</div>
                 <div class="row">
                   <div class="field">
                     <label for="set-barraFonte">Tamanho da fonte (pt)</label>
@@ -254,9 +350,11 @@
                       <input type="text" id="set-barraCor" placeholder="auto ou #RRGGBB">
                       <input type="color" id="set-barraCorPicker" value="#ffffff" title="Escolher cor">
                     </div>
-                    <div class="desc"><code>auto</code> = preto/branco conforme a barra, ou um hex (ex.: <code>#FFD700</code>).</div>
+                    <div class="desc"><code>auto</code> = preto/branco conforme a barra</div>
                   </div>
                 </div>
+
+                <div class="set-group">Conteúdo</div>
                 <div class="row">
                   <div class="field">
                     <label for="set-barraFormatoReset">Formato do reset</label>
@@ -264,7 +362,6 @@
                       <option value="restante">Tempo restante (ex.: 4:19h)</option>
                       <option value="exato">Hora/data exata (ex.: 19:20 · 22/06, 19:59)</option>
                     </select>
-                    <div class="desc">No modo exato, mostra só a hora se o reset for hoje, ou com a data se for outro dia.</div>
                   </div>
                   <div class="field">
                     <label for="set-barraJanelas">Janelas exibidas</label>
@@ -273,38 +370,130 @@
                       <option value="sessao">Apenas sessão (5h)</option>
                       <option value="semanal">Apenas semanal (7d)</option>
                     </select>
-                    <div class="desc">Com apenas uma janela, o separador "|" some.</div>
                   </div>
                 </div>
               </div>
 
               <!-- Widget -->
               <div class="stab" data-spanel="widget">
-                <p class="hint">Widget flutuante na área de trabalho, sempre na frente, com os cards de uso. Aplicado em ~1s ao salvar (ignorado em macOS).</p>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-wdgHab"><span>Mostrar widget na área de trabalho</span></label>
-                  <div class="desc">Abre/fecha a janelinha do widget. Arraste-a para reposicionar; a posição e o tamanho são lembrados.</div>
+                <div class="row prov-toggles-row">
+                  <label class="prov-toggle">
+                    <span class="provider-logo"><span class="spark">✳</span></span>
+                    <span class="prov-toggle-name">Claude</span>
+                    <span class="switch"><input type="checkbox" id="set-wdgClaude"><span class="switch-track"></span></span>
+                  </label>
+                  <label class="prov-toggle">
+                    <span class="provider-logo">
+                      <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+                        <defs><linearGradient id="codexg-wdg" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                          <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
+                          <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
+                        <g fill="url(#codexg-wdg)">
+                          <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
+                          <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
+                          <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
+                        </g>
+                        <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+                        <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
+                      </svg>
+                    </span>
+                    <span class="prov-toggle-name">Codex</span>
+                    <span class="switch"><input type="checkbox" id="set-wdgCodex"><span class="switch-track"></span></span>
+                  </label>
                 </div>
-                <div class="row">
+
+                <div class="set-group">Modo de exibição</div>
+                <div class="pv-modes" role="radiogroup" aria-label="Modo de exibição do widget">
+                  <label class="pv-mode">
+                    <input type="radio" name="wdgModo" value="completo">
+                    <div class="pv" aria-hidden="true">
+                      <div class="pv-screen">
+                        <div class="pv-desk-widget pv-wg-completo">
+                          <div class="pv-wprov">
+                            <div class="pv-whead"><span class="pv-ico spark">✳</span><b>Claude</b></div>
+                            <span class="pv-track"><i style="width:55%"></i></span>
+                          </div>
+                          <div class="pv-wprov">
+                            <div class="pv-whead"><svg class="pv-ico" viewBox="0 0 100 100" aria-hidden="true"><g fill="url(#codexg)"><circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/><circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/><circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/></g><path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/></svg><b>Codex</b></div>
+                            <span class="pv-track"><i style="width:35%"></i></span>
+                          </div>
+                        </div>
+                        <div class="pv-bar">
+                          <div class="pv-menu"><span class="pv-app a1"></span><span class="pv-app a2"></span></div>
+                          <div class="pv-right"><div class="pv-tray"><i></i><i></i></div></div>
+                        </div>
+                      </div>
+                    </div>
+                    <span class="pv-mode-name">Completo</span>
+                  </label>
+                  <label class="pv-mode">
+                    <input type="radio" name="wdgModo" value="minimo">
+                    <div class="pv" aria-hidden="true">
+                      <div class="pv-screen">
+                        <div class="pv-desk-widget pv-wg-minimo">
+                          <div class="pv-wmin"><span class="pv-ico spark">✳</span><b>Claude</b><em>20%</em><em>50%</em></div>
+                          <div class="pv-wmin"><svg class="pv-ico" viewBox="0 0 100 100" aria-hidden="true"><g fill="url(#codexg)"><circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/><circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/><circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/></g><path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/></svg><b>Codex</b><em>30%</em><em>45%</em></div>
+                        </div>
+                        <div class="pv-bar">
+                          <div class="pv-menu"><span class="pv-app a1"></span><span class="pv-app a2"></span></div>
+                          <div class="pv-right"><div class="pv-tray"><i></i><i></i></div></div>
+                        </div>
+                      </div>
+                    </div>
+                    <span class="pv-mode-name">Mínimo</span>
+                  </label>
+                  <label class="pv-mode">
+                    <input type="radio" name="wdgModo" value="anelduplo">
+                    <div class="pv" aria-hidden="true">
+                      <div class="pv-screen">
+                        <div class="pv-desk-widget pv-wg-anel">
+                          <span class="pv-rings">
+                            <svg viewBox="0 0 76 76" aria-hidden="true">
+                              <g transform="rotate(-90 38 38)" fill="none" stroke-width="6" stroke-linecap="round">
+                                <circle cx="38" cy="38" r="31" stroke="rgba(0,0,0,.4)"/>
+                                <circle cx="38" cy="38" r="22" stroke="rgba(0,0,0,.4)"/>
+                                <circle cx="38" cy="38" r="31" stroke="#d9b35a" stroke-dasharray="107.1 194.78"/>
+                                <circle cx="38" cy="38" r="22" stroke="#7fc99a" stroke-dasharray="45.6 138.23"/>
+                              </g>
+                            </svg>
+                            <span class="pv-rings-ico spark">✳</span>
+                          </span>
+                          <span class="pv-anel-leg">
+                            <span><span class="pv-dot" style="background:#d9b35a"></span>55%</span>
+                            <span><span class="pv-dot" style="background:#7fc99a"></span>33%</span>
+                          </span>
+                        </div>
+                        <div class="pv-bar">
+                          <div class="pv-menu"><span class="pv-app a1"></span><span class="pv-app a2"></span></div>
+                          <div class="pv-right"><div class="pv-tray"><i></i><i></i></div></div>
+                        </div>
+                      </div>
+                    </div>
+                    <span class="pv-mode-name">Anel duplo</span>
+                  </label>
+                </div>
+
+                <div class="set-group">Aparência</div>
+                <div class="set-roomy">
                   <div class="field">
-                    <label class="check"><input type="checkbox" id="set-wdgClaude"><span>Mostrar Claude no widget</span></label>
+                    <label class="check"><input type="checkbox" id="set-wdgTopo"><span>Sempre na frente</span></label>
                   </div>
                   <div class="field">
-                    <label class="check"><input type="checkbox" id="set-wdgCodex"><span>Mostrar Codex no widget</span></label>
+                    <label for="set-wdgFundo">Imagem/GIF de fundo</label>
+                    <div class="inline">
+                      <input type="text" id="set-wdgFundo" placeholder="Nenhum fundo selecionado" readonly>
+                      <button type="button" class="btn" id="set-wdgFundoPick">Escolher…</button>
+                      <button type="button" class="btn" id="set-wdgFundoClear">Remover</button>
+                    </div>
+                    <div class="desc">PNG, JPG, GIF, WEBP ou BMP</div>
+                  </div>
+                  <div class="field">
+                    <label for="set-wdgOpac">Opacidade do painel: <span id="set-wdgOpacVal">90</span>%</label>
+                    <input type="range" id="set-wdgOpac" min="0" max="100" step="5" value="90">
                   </div>
                 </div>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-wdgTopo"><span>Sempre na frente</span></label>
-                </div>
-                <div class="field">
-                  <label for="set-wdgModo">Modo de exibição</label>
-                  <select id="set-wdgModo">
-                    <option value="completo">Completo (cards com barras)</option>
-                    <option value="minimo">Mínimo (uma linha por provedor)</option>
-                    <option value="anelduplo">Anel duplo (anéis de progresso)</option>
-                  </select>
-                  <div class="desc">Como cada provedor aparece no widget. "Anel duplo" desenha a sessão (5h) no anel externo e o semanal (7d) no interno.</div>
-                </div>
+
+                <div class="set-group">Conteúdo</div>
                 <div class="row">
                   <div class="field">
                     <label for="set-wdgJanelas">Janelas exibidas</label>
@@ -323,28 +512,12 @@
                     </select>
                   </div>
                 </div>
-                <div class="field">
-                  <label for="set-wdgFundo">Imagem/GIF de fundo</label>
-                  <div class="inline">
-                    <input type="text" id="set-wdgFundo" placeholder="Nenhum fundo selecionado" readonly>
-                    <button type="button" class="btn" id="set-wdgFundoPick">Escolher…</button>
-                    <button type="button" class="btn" id="set-wdgFundoClear">Remover</button>
-                  </div>
-                  <div class="desc">PNG, JPG, GIF, WEBP ou BMP. Vazio = sem fundo (só o painel escuro).</div>
-                </div>
-                <div class="field">
-                  <label for="set-wdgOpac">Opacidade do painel: <span id="set-wdgOpacVal">90</span>%</label>
-                  <input type="range" id="set-wdgOpac" min="0" max="100" step="5" value="90">
-                  <div class="desc">Menor opacidade deixa o fundo (imagem/gif) aparecer mais.</div>
-                </div>
               </div>
 
               <!-- Servidor -->
               <div class="stab" data-spanel="servidor">
-                <p class="hint">Serve os dashboards de uso (somente leitura) por HTTP no navegador, protegidos por um PIN. Não expõe Configurações, Envio nem credenciais. Para acesso externo com HTTPS, coloque um proxy/túnel (ex.: Cloudflare) na frente.</p>
                 <div class="field">
                   <label class="check"><input type="checkbox" id="set-srvHab"><span>Habilitar servidor dos dashboards</span></label>
-                  <div class="desc">Ao ligar (com um PIN definido), o servidor sobe na hora. Trocar host/porta reinicia o servidor e desconecta as sessões abertas.</div>
                 </div>
                 <div class="row">
                   <div class="field">
@@ -361,21 +534,12 @@
                   </div>
                 </div>
                 <div class="field">
-                  <label for="set-srvPin">PIN de acesso</label>
+                  <label for="set-srvPin">PIN de acesso <span class="req">(obrigatório)</span></label>
                   <div class="inline">
                     <input type="password" id="set-srvPin" placeholder="defina um PIN" autocomplete="new-password">
                     <button type="button" class="btn btn-show" id="set-srvPinToggle">Mostrar</button>
                   </div>
-                  <div class="desc">Exigido para acessar os dashboards no navegador. Sem PIN, o servidor não inicia mesmo habilitado.</div>
-                </div>
-              </div>
-
-              <!-- Sistema -->
-              <div class="stab" data-spanel="sistema">
-                <p class="hint">Integração com o sistema operacional.</p>
-                <div class="field">
-                  <label class="check"><input type="checkbox" id="set-autostart"><span id="set-autostartLabel">Iniciar com o sistema</span></label>
-                  <div class="desc">Inicia o app automaticamente no login.</div>
+                  <div id="set-srvPinWarn" class="field-warn" hidden>Defina um PIN para o servidor poder iniciar.</div>
                 </div>
               </div>
 
