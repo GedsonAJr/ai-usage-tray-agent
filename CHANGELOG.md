@@ -26,6 +26,15 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Alterado
+- Ícone da bandeja (Windows): o tooltip agora mostra só o nome do app; o uso continua no menu do tray e no widget da barra de tarefas.
+- Configurações → Codex e Claude: a escolha do modo de autenticação virou botões lado a lado com ícone, no lugar da lista suspensa.
+- Configurações → Servidor: o cabeçalho passou a ficar dentro do card e as opções logo abaixo, seguindo o mesmo layout das abas dos provedores.
+- Configurações → Envio: os provedores foram para o topo, lado a lado e com uma divisória separando-os dos demais campos; o aviso de provedor sem credenciais ficou mais curto ("Sem credenciais").
+- Configurações: as telas deixaram de mudar de largura quando a barra de rolagem vertical aparece.
+
+## [0.2.47] - 2026-07-02
+
 ### Corrigido
 - Configurações → Claude (login pelo navegador): quando a conta tem mais de uma organização, o app agora pede para você escolher qual usar (mostrando o uso atual de cada uma) em vez de escolher automaticamente a primeira — que podia ser uma organização sem uso, fazendo o app reportar 0% mesmo com a organização certa em uso.
 

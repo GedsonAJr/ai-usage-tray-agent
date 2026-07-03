@@ -59,7 +59,9 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 }
 .nav-item.has-update .nav-update-badge { display: inline-block; }
 
-.content { flex: 1; min-width: 0; overflow-y: auto; padding: 28px 28px 48px; }
+/* scrollbar-gutter: reserva o espaco da barra de rolagem mesmo sem scroll, para
+   a largura do conteudo nao "pular" quando a barra aparece/some. */
+.content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 28px 28px 48px; }
 .view { display: none; max-width: 880px; margin: 0 auto; }
 .view.on { display: block; }
 
@@ -214,11 +216,26 @@ select {
   background-position: right 13px center;
   background-size: 11px;
 }
+/* Segmented control (radio group) — substitui o <select> quando ha' poucas
+   opcoes mutuamente exclusivas (ex.: modo de autenticacao). */
+.segmented { display: flex; gap: 3px; padding: 3px; background: #1c1b18; border: 1px solid #3a3833; border-radius: 11px; }
+.seg-option { flex: 1; display: flex; position: relative; }
+.seg-option input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.seg-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 8px 12px;
+  border-radius: 8px; color: #9a968d; font-size: 14px; cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background .15s ease, color .15s ease; }
+.seg-btn svg { width: 16px; height: 16px; flex: none; }
+.seg-option:hover .seg-btn { color: #e8e6e1; }
+.seg-option input:checked + .seg-btn { background: #3a3833; color: #fff; }
+.seg-option input:focus-visible + .seg-btn { outline: 2px solid #d97757; outline-offset: 2px; }
+
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 .row > .field { flex: 1; min-width: 130px; }
 /* Cabecalho de subgrupo dentro de uma aba de configuracoes (Provedores, Posicao, etc.). */
 .set-group { margin: 0 0 12px; padding-top: 14px; border-top: 1px solid #2a2926; color: #e8e6e1; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .stab > .set-group:first-child, .pv + .set-group { padding-top: 2px; border-top: none; }
+/* Linha divisória fina entre blocos de uma aba (ex.: provedores × campos no Envio). */
+.divider { border: none; border-top: 1px solid #34322d; margin: 0 0 18px; }
 
 /* Cabecalho de destaque do provedor (abas Codex/Claude): logo + nome + um toggle
    mestre que liga/desliga a coleta daquele provedor. */
@@ -238,10 +255,11 @@ select {
    inferior dele para não somar com o gap do provider-body. */
 #set-codexFileAuth > .field,
 #set-codexBrowserAuth > .field { margin-bottom: 0; }
-/* Nas abas Codex e Claude, só o cabeçalho fica no .provider-card; o corpo usa a
-   largura cheia da aba, como as demais abas. */
+/* Nas abas Codex, Claude e Servidor, só o cabeçalho fica no .provider-card; o
+   corpo usa a largura cheia da aba, como as demais abas. */
 .stab-codex > .provider-body,
-.stab-claude > .provider-body { padding: 0; }
+.stab-claude > .provider-body,
+.stab-servidor > .provider-body { padding: 0; }
 /* Texto do toggle de provedor com nome + nota opcional (ex.: aba Envio). */
 .prov-toggle-text { margin-right: auto; display: flex; flex-direction: column; gap: 2px; }
 .prov-toggle-text .prov-toggle-name { margin-right: 0; }
