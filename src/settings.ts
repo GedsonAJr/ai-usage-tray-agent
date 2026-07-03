@@ -64,6 +64,14 @@ interface SaveSettings {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 
+// Segmented control (radio group): le' a opcao marcada e marca uma opcao por valor.
+const radioValue = (name: string): string | undefined =>
+  document.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)?.value;
+const setRadio = (name: string, value: string): void => {
+  const el = document.querySelector<HTMLInputElement>(`input[name="${name}"][value="${value}"]`);
+  if (el) el.checked = true;
+};
+
 function fillForm(data: SettingsData): void {
   const c = data.config;
   const codex = c.providers.codex;
@@ -78,14 +86,14 @@ function fillForm(data: SettingsData): void {
 
   $<HTMLInputElement>("set-codexHab").checked = codex.habilitado !== false;
   $<HTMLInputElement>("set-codexAuth").value = codex.authJsonPath ?? "";
-  $<HTMLSelectElement>("set-codexAuthMode").value = codex.authMode === "navegador" ? "navegador" : "arquivo";
+  setRadio("codexAuthMode", codex.authMode === "navegador" ? "navegador" : "arquivo");
   syncCodexAuthMode();
   $<HTMLInputElement>("set-codexTaskbar").checked = codex.mostraNaTaskbarWindows !== false;
 
   $<HTMLInputElement>("set-claudeHab").checked = claude.habilitado !== false;
   $<HTMLInputElement>("set-claudeOrg").value = claude.organizationId ?? "";
   $<HTMLInputElement>("set-claudeCookie").value = claude.cookie ?? "";
-  $<HTMLSelectElement>("set-claudeAuthMode").value = claude.authMode === "navegador" ? "navegador" : "manual";
+  setRadio("claudeAuthMode", claude.authMode === "navegador" ? "navegador" : "manual");
   syncClaudeAuthMode();
   $<HTMLInputElement>("set-claudeTaskbar").checked = claude.mostraNaTaskbarWindows !== false;
 
@@ -139,14 +147,14 @@ function collect(): SaveSettings {
         habilitado: $<HTMLInputElement>("set-codexHab").checked,
         mostraNaTaskbarWindows: $<HTMLInputElement>("set-codexTaskbar").checked,
         authJsonPath: $<HTMLInputElement>("set-codexAuth").value.trim(),
-        authMode: $<HTMLSelectElement>("set-codexAuthMode").value === "navegador" ? "navegador" : "arquivo",
+        authMode: codexAuthMode(),
       },
       claude: {
         habilitado: $<HTMLInputElement>("set-claudeHab").checked,
         mostraNaTaskbarWindows: $<HTMLInputElement>("set-claudeTaskbar").checked,
         organizationId: $<HTMLInputElement>("set-claudeOrg").value.trim(),
         cookie: $<HTMLInputElement>("set-claudeCookie").value.trim(),
-        authMode: $<HTMLSelectElement>("set-claudeAuthMode").value === "navegador" ? "navegador" : "manual",
+        authMode: claudeAuthMode(),
       },
     },
     barraTarefas: {
@@ -311,7 +319,7 @@ let codexLoginInProgress = false;
 
 /// Mostra a seção do modo escolhido (caminho do auth.json ou login pelo navegador).
 function codexAuthMode(): "arquivo" | "navegador" {
-  return $<HTMLSelectElement>("set-codexAuthMode").value === "navegador" ? "navegador" : "arquivo";
+  return radioValue("codexAuthMode") === "navegador" ? "navegador" : "arquivo";
 }
 function syncCodexAuthMode(): void {
   const mode = codexAuthMode();
@@ -442,7 +450,7 @@ let claudeLoginInProgress = false;
 let claudeOrgPickerOpen = false;
 
 function claudeAuthMode(): "manual" | "navegador" {
-  return $<HTMLSelectElement>("set-claudeAuthMode").value === "navegador" ? "navegador" : "manual";
+  return radioValue("claudeAuthMode") === "navegador" ? "navegador" : "manual";
 }
 /// Mostra a seção do modo escolhido (campos manuais ou login pelo navegador).
 function syncClaudeAuthMode(): void {
@@ -675,11 +683,10 @@ function syncProviderHints(): void {
 }
 
 /// Aviso por provedor (abas Envio, Barra de tarefas e Widget): se o provedor está
-/// desativado ou sem credenciais, avisa — mas o toggle segue operável. `suffix`
-/// completa o texto (Envio explica "não há dados para enviar"; barra/widget não).
-function providerNote(habilitado: boolean, configurado: boolean, suffix: string): string {
-  if (!habilitado) return `Provedor desativado${suffix}`;
-  if (!configurado) return `Sem credenciais${suffix}`;
+/// desativado ou sem credenciais, avisa — mas o toggle segue operável.
+function providerNote(habilitado: boolean, configurado: boolean): string {
+  if (!habilitado) return "Provedor desativado";
+  if (!configurado) return "Sem credenciais";
   return "";
 }
 function setNotes(ids: string[], msg: string): void {
@@ -700,10 +707,10 @@ function syncProviderNotes(): void {
     ? claudeConnected
     : $<HTMLInputElement>("set-claudeOrg").value.trim() !== "" &&
       $<HTMLInputElement>("set-claudeCookie").value.trim() !== "";
-  setNotes(["envio-codex-note"], providerNote(codexOn, codexCfg, " — não há dados para enviar."));
-  setNotes(["envio-claude-note"], providerNote(claudeOn, claudeCfg, " — não há dados para enviar."));
-  setNotes(["barra-codex-note", "wdg-codex-note"], providerNote(codexOn, codexCfg, ""));
-  setNotes(["barra-claude-note", "wdg-claude-note"], providerNote(claudeOn, claudeCfg, ""));
+  setNotes(["envio-codex-note"], providerNote(codexOn, codexCfg));
+  setNotes(["envio-claude-note"], providerNote(claudeOn, claudeCfg));
+  setNotes(["barra-codex-note", "wdg-codex-note"], providerNote(codexOn, codexCfg));
+  setNotes(["barra-claude-note", "wdg-claude-note"], providerNote(claudeOn, claudeCfg));
 }
 
 function activateTab(tab: string): void {

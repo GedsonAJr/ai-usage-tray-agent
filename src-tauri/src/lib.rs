@@ -1256,7 +1256,9 @@ fn create_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
             }
         })
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("AiUsageTrayAgent")
+        // Tooltip estatico so' com o nome do app (Windows). Nao reflete metricas:
+        // o uso vai no menu do tray e no widget da barra. No Linux e' no-op.
+        .tooltip(APP_NAME_WINDOWS)
         .build(app)?;
 
     Ok(())
@@ -1915,16 +1917,19 @@ fn send_metric_to_loki(
 }
 
 fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> tauri::Result<()> {
+    // `tray` so' e' usado no Linux (set_title); no Windows o handle serve apenas
+    // como guarda de "o tray existe".
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        // Le' a config uma unica vez por refresh (em vez de recarregar para o
-        // tooltip, a barra de tarefas e o widget separadamente).
+        // Le' a config uma unica vez por refresh (em vez de recarregar para a
+        // barra de tarefas e o widget separadamente).
         let config = app
             .try_state::<RuntimePaths>()
             .map(|paths| read_config(paths.inner()));
 
         // Metrica de provider desabilitado nao deve sobreviver no snapshot: senao
-        // o tooltip/menu do tray exibiriam um valor obsoleto depois de desligar o
-        // provider. O snapshot e' a fonte unica (tambem lida por "Uso atual" e pelo
+        // o menu do tray (e o titulo no Linux) exibiriam um valor obsoleto depois
+        // de desligar o provider. O snapshot e' a fonte unica (tambem lida por "Uso atual" e pelo
         // widget, que ja' tratam o estado "desabilitado").
         let snapshot = {
             let mut guard = lock_snapshot(shared);
@@ -1941,11 +1946,6 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
 
         #[cfg(target_os = "windows")]
         {
-            tray.set_tooltip(Some(format!(
-                "AiUsageTrayAgent\nCodex: {}\nClaude: {}",
-                metric_text(snapshot.codex_metric.as_ref()),
-                metric_text(snapshot.claude_metric.as_ref())
-            )))?;
             taskbar_widget::set_paused(snapshot.paused);
             if let Some(config) = &config {
                 taskbar_widget::set_offset(config.barra_tarefas.deslocamento);
@@ -2392,6 +2392,7 @@ fn normalized_user(usuario: &str) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn metric_text(metric: Option<&UsageMetric>) -> String {
     let Some(metric) = metric else {
         return "--".to_string();
