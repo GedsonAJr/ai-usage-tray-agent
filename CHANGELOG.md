@@ -26,6 +26,20 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Adicionado
+- Tela Uso atual: cada janela (sessão 5h e semanal 7d) ganhou um mini gráfico de linha com a evolução da porcentagem de uso nas últimas 5 horas, com detalhe de horário e valor ao passar o mouse.
+- Tela Uso atual: opção "Gráfico" para mostrar ou ocultar os gráficos; ao desabilitar, o histórico (mantido só em memória) é descartado, com aviso de perda de dados e a opção "Não perguntar novamente".
+- Tela Uso atual: botão "Reordenar" para ordenar os provedores arrastando os cards; a mesma ordem passa a valer também no widget e na barra de tarefas.
+- A janela do app agora lembra o tamanho e a posição entre aberturas.
+
+### Alterado
+- A janela do app abre direto no tamanho e posição salvos e com fundo escuro, sem o "flash" branco nem o salto de tamanho ao abrir.
+
+### Corrigido
+- Dashboard Claude (abas Ferramentas e Projetos): ao reduzir a altura da janela, agora só a lista rola por dentro, sem criar rolagem também na janela.
+
+## [0.2.48] - 2026-07-03
+
 ### Alterado
 - Ícone da bandeja (Windows): o tooltip agora mostra só o nome do app; o uso continua no menu do tray e no widget da barra de tarefas.
 - Configurações → Codex e Claude: a escolha do modo de autenticação virou botões lado a lado com ícone, no lugar da lista suspensa.

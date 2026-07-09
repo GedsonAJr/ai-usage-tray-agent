@@ -46,8 +46,20 @@
 
         <!-- ===== Uso atual ===== -->
         <section id="view-usage" class="view on">
-          <h1>Uso atual</h1>
-          <p class="sub" id="usage-sub"></p>
+          <div class="usage-head">
+            <div class="usage-titles">
+              <h1>Uso atual</h1>
+              <p class="sub" id="usage-sub"></p>
+            </div>
+            <div class="usage-head-actions">
+              <button type="button" class="usage-reorder-btn" id="usage-reorder-btn" title="Reordenar os provedores arrastando os cards">Reordenar</button>
+              <span class="usage-divider" aria-hidden="true"></span>
+              <div class="usage-chart-toggle" id="usage-chart-label">
+                <span>Gráfico</span>
+                <label class="switch" title="Mostrar o gráfico de uso das últimas 5h abaixo de cada janela"><input type="checkbox" id="usage-chart-toggle"><span class="switch-track"></span></label>
+              </div>
+            </div>
+          </div>
           <div id="usage-banner"></div>
           <div id="usage-cards"></div>
           <div class="usage-footer">
@@ -674,5 +686,20 @@
 
     <div id="pill" class="pill hide"></div>
     <div id="tip" class="tip hide"></div>
+    <div id="modal-overlay" class="modal-overlay hide">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-title" id="modal-title">Desabilitar o gráfico?</div>
+        <div class="modal-body">
+          O histórico de uso é mantido apenas em memória. Ao desabilitar o gráfico,
+          <b>os dados coletados serão perdidos</b>. Você pode reativar depois, mas a
+          coleta recomeça do zero.
+        </div>
+        <label class="modal-check"><input type="checkbox" id="modal-dontask"> Não perguntar novamente</label>
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel" class="btn">Cancelar</button>
+          <button type="button" id="modal-confirm" class="btn btn-primary">Desabilitar</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

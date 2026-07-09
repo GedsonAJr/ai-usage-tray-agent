@@ -54,6 +54,7 @@ struct AppConfig {
     widget: WidgetConfig,
     envio: EnvioConfig,
     servidor: ServerConfig,
+    uso_atual: UsoAtualConfig,
 }
 
 /// Servidor HTTP local (opcional) que serve os dashboards de uso pelo navegador,
@@ -110,6 +111,29 @@ impl Default for EnvioConfig {
             pausado: false,
             claude: true,
             codex: true,
+        }
+    }
+}
+
+/// Preferencias da tela "Uso atual". Por enquanto so' o liga/desliga do mini
+/// grafico de linha (historico das ultimas 5h). Gerenciado pelo toggle da propria
+/// tela (comando `set_usage_chart`), nao pelo painel de Configuracoes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct UsoAtualConfig {
+    /// Exibe o mini grafico abaixo de cada janela. Com `false`, o grafico some da
+    /// tela e o backend para de gravar (e limpa) o historico em memoria.
+    grafico: bool,
+    /// Mostrar o aviso "os dados serao perdidos" ao desabilitar o grafico. Vira
+    /// `false` quando o usuario marca "Nao perguntar novamente".
+    avisar_ao_desligar: bool,
+}
+
+impl Default for UsoAtualConfig {
+    fn default() -> Self {
+        Self {
+            grafico: true,
+            avisar_ao_desligar: true,
         }
     }
 }
@@ -248,11 +272,31 @@ struct LokiConfig {
     url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Provedores conhecidos, na ordem canônica (padrão e base da normalização de
+/// `providers.ordem`). Ao adicionar um novo provedor no futuro, inclua a chave
+/// aqui — ele passa a ter card/slot e entra no fim da ordem por padrão.
+const PROVIDER_KEYS: [&str; 2] = ["claude", "codex"];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct ProvidersConfig {
     codex: CodexConfig,
     claude: ClaudeConfig,
+    /// Ordem de exibição dos provedores (esquerda→direita / cima→baixo), aplicada
+    /// à tela "Uso atual", ao widget e à barra de tarefas (uma config para as três).
+    /// Lista de chaves de `PROVIDER_KEYS`; `normalize_config` garante que contenha
+    /// exatamente os provedores conhecidos, sem duplicatas.
+    ordem: Vec<String>,
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            codex: CodexConfig::default(),
+            claude: ClaudeConfig::default(),
+            ordem: PROVIDER_KEYS.iter().map(|key| key.to_string()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,6 +388,10 @@ struct RuntimeSnapshot {
     /// Historico curto dos ultimos envios (anel), exibido na tela "Envio de dados"
     /// em tempo (quase) real. Mais novos no fim; limitado a `SEND_LOG_MAX`.
     send_log: Vec<SendLogEntry>,
+    /// Amostras do uso ao longo do tempo (anel em memoria), para os mini-graficos
+    /// de linha da tela "Uso atual". Mais novas no fim; podadas para as ultimas
+    /// `USAGE_HISTORY_WINDOW_SECS`. So' vive enquanto o app roda (sem disco).
+    usage_history: Vec<UsageSample>,
 }
 
 /// Uma entrada do historico de envios: quando, qual ferramenta e o resultado.
@@ -366,6 +414,30 @@ struct SendLogEntry {
 
 /// Quantas entradas de envio manter no anel em memoria.
 const SEND_LOG_MAX: usize = 50;
+
+/// Uma amostra do uso num instante, para os mini-graficos de linha da tela "Uso
+/// atual". Cada campo e' a % daquela janela (sessao 5h / semanal 7d) de cada
+/// provedor, ou `None` quando o provedor estava desabilitado/com erro naquele
+/// momento (a UI trata `None` como "sem ponto").
+#[derive(Debug, Clone, Serialize)]
+struct UsageSample {
+    /// ISO-8601 (RFC 3339) em UTC do momento da coleta.
+    t: String,
+    claude_5h: Option<f64>,
+    claude_7d: Option<f64>,
+    codex_5h: Option<f64>,
+    codex_7d: Option<f64>,
+}
+
+/// Janela do historico dos mini-graficos: ultimas 5 horas (a mesma janela da
+/// sessao). Por escolha de produto, tanto o grafico da sessao quanto o semanal
+/// mostram apenas este intervalo — o historico e' so' em memoria (some ao fechar).
+const USAGE_HISTORY_WINDOW_SECS: i64 = 5 * 60 * 60;
+/// Teto de amostras no anel (rede de seguranca contra relogio irregular); a 5s de
+/// intervalo, 5h dao' ~3600 pontos.
+const USAGE_HISTORY_MAX: usize = 6000;
+/// Quantos pontos, no maximo, cada serie devolve para a UI (reduzida por stride).
+const USAGE_CHART_POINTS: usize = 120;
 
 /// Dados da atualizacao disponivel detectada por `check_for_updates`, consumidos
 /// pela janela de novidades (`update.html`) via `get_pending_update`. Guardamos
@@ -486,6 +558,7 @@ impl Default for AppConfig {
             widget: WidgetConfig::default(),
             envio: EnvioConfig::default(),
             servidor: ServerConfig::default(),
+            uso_atual: UsoAtualConfig::default(),
         }
     }
 }
@@ -500,12 +573,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
-            // Persiste POSICAO e SIZE do widget (o usuario pode redimensiona-lo;
-            // o widget.ts so' auto-ajusta a altura ate' o primeiro resize manual).
-            // A janela `main` fica de fora (negada) e continua centralizando sob
-            // demanda.
+            // Persiste POSICAO e SIZE das janelas `widget` e `main` (o usuario pode
+            // redimensiona-las). A `main` restaura o estado na criacao e salva ao
+            // fechar (ver show_main_window). So' a janela transitoria de novidades
+            // (`update`) fica de fora.
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["main", "update"])
+                .with_denylist(&["update"])
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::POSITION
                         | tauri_plugin_window_state::StateFlags::SIZE,
@@ -527,6 +600,8 @@ pub fn run() {
             set_envio_paused,
             set_envio_provider,
             clear_send_log,
+            set_usage_chart,
+            set_providers_order,
             check_updates_now,
             get_pending_update,
             install_update,
@@ -712,11 +787,16 @@ fn save_settings(
 ) -> Result<Value, String> {
     let mut config = settings.config;
 
-    // O bloco `envio` (pausa geral + envio por provider) e' gerenciado pela tela
-    // "Envio de dados", nao pelas Configuracoes. O painel de Configuracoes nao
-    // envia esse campo, entao ele chegaria aqui com os defaults e sobrescreveria a
-    // escolha do usuario. Preserva o que ja' esta' em disco.
-    config.envio = read_config(paths.inner()).envio;
+    // Campos gerenciados fora do painel de Configuracoes: `envio` (tela "Envio de
+    // dados"), `uso_atual` (toggle da tela "Uso atual") e `providers.ordem` (arrastar
+    // na tela "Uso atual"). O painel nao envia esses campos, entao chegariam aqui com
+    // os defaults e sobrescreveriam a escolha do usuario. Preserva o disco. Obs.: o
+    // painel manda o resto de `providers` (claude/codex), por isso preservamos so' o
+    // sub-campo `ordem`, nao o bloco `providers` inteiro.
+    let disk = read_config(paths.inner());
+    config.envio = disk.envio;
+    config.uso_atual = disk.uso_atual;
+    config.providers.ordem = disk.providers.ordem;
     normalize_config(&mut config);
 
     write_config(paths.inner(), &config)
@@ -733,19 +813,55 @@ fn save_settings(
 /// habilitado e se a coleta esta' pausada. Nao faz rede: le' apenas o snapshot
 /// ja' coletado pelo worker.
 fn usage_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
-    let snapshot = lock_snapshot(shared).clone();
+    // Le' o config fora do lock (faz I/O de disco); depois trava o snapshot so' o
+    // tempo de montar as series do historico (downsample, sem I/O) e clonar as duas
+    // metricas — sem clonar o anel inteiro de amostras.
     let config = read_config(paths);
+    let chart_enabled = config.uso_atual.grafico;
+    let (paused, last_error, claude_metric, codex_metric, history) = {
+        let snapshot = lock_snapshot(shared);
+        // Com o grafico desligado, devolve series vazias (o anel ja' e' limpo no
+        // worker; aqui garante que a UI nunca receba pontos residuais).
+        let history = if chart_enabled {
+            json!({
+                "claude": {
+                    "session": downsample_usage(&snapshot.usage_history, |s| s.claude_5h),
+                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.claude_7d),
+                },
+                "codex": {
+                    "session": downsample_usage(&snapshot.usage_history, |s| s.codex_5h),
+                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.codex_7d),
+                },
+            })
+        } else {
+            json!({
+                "claude": { "session": [], "weekly": [] },
+                "codex": { "session": [], "weekly": [] },
+            })
+        };
+        (
+            snapshot.paused,
+            snapshot.last_error.clone(),
+            snapshot.claude_metric.clone(),
+            snapshot.codex_metric.clone(),
+            history,
+        )
+    };
     json!({
-        "paused": snapshot.paused,
-        "lastError": snapshot.last_error,
+        "paused": paused,
+        "lastError": last_error,
+        "chartEnabled": chart_enabled,
+        "chartWarnOnDisable": config.uso_atual.avisar_ao_desligar,
+        "ordem": config.providers.ordem,
         "claude": {
             "habilitado": config.providers.claude.habilitado,
-            "metric": snapshot.claude_metric,
+            "metric": claude_metric,
         },
         "codex": {
             "habilitado": config.providers.codex.habilitado,
-            "metric": snapshot.codex_metric,
+            "metric": codex_metric,
         },
+        "history": history,
     })
 }
 
@@ -907,6 +1023,52 @@ fn clear_send_log(paths: State<'_, RuntimePaths>, shared: State<'_, Arc<SharedSt
     envio_value(paths.inner(), shared.inner())
 }
 
+/// Liga/desliga o mini grafico da tela "Uso atual", persistindo em
+/// `config.usoAtual.grafico`. Ao desligar, limpa o historico em memoria na hora
+/// (para de gravar e "exclui os dados"). Se `dont_ask_again` vier `Some(true)`,
+/// desliga tambem o aviso de perda de dados (`avisarAoDesligar`). Devolve o estado
+/// de uso ja' atualizado (com `chartEnabled`/`chartWarnOnDisable` e o historico
+/// refletindo a escolha).
+#[tauri::command]
+fn set_usage_chart(
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    enabled: bool,
+    dont_ask_again: Option<bool>,
+) -> Result<Value, String> {
+    let mut config = read_config(paths.inner());
+    config.uso_atual.grafico = enabled;
+    if dont_ask_again == Some(true) {
+        config.uso_atual.avisar_ao_desligar = false;
+    }
+    write_config(paths.inner(), &config)
+        .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    if !enabled {
+        lock_snapshot(shared.inner()).usage_history.clear();
+    }
+    Ok(usage_value(paths.inner(), shared.inner()))
+}
+
+/// Define a ordem de exibição dos provedores — uma única config aplicada à tela
+/// "Uso atual", ao widget e à barra de tarefas. Persiste em `config.providers.ordem`
+/// (normalizada para uma permutação exata dos provedores conhecidos) e reaplica o
+/// tray/barra na hora. Devolve o estado de uso já atualizado (com a nova `ordem`).
+#[tauri::command]
+fn set_providers_order(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    order: Vec<String>,
+) -> Result<Value, String> {
+    let mut config = read_config(paths.inner());
+    config.providers.ordem = order;
+    normalize_config(&mut config);
+    write_config(paths.inner(), &config)
+        .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(usage_value(paths.inner(), shared.inner()))
+}
+
 /// Aplica o estado de pausa: snapshot em memoria + persistencia em
 /// `config.envio.pausado` + atualizacao do tray + log. Compartilhado pelo comando
 /// da tela e pelo item do tray.
@@ -955,6 +1117,7 @@ fn widget_state_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value 
         "formatoReset": widget.formato_reset,
         "modo": widget.modo,
         "sempreNaFrente": widget.sempre_na_frente,
+        "ordem": config.providers.ordem,
         "paused": snapshot.paused,
         "claude": {
             "habilitado": config.providers.claude.habilitado,
@@ -1334,6 +1497,12 @@ fn update_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &RuntimeSnapshot) 
 /// item "Abrir" do tray. Se a janela ja existe, apenas a traz ao foco (desfazendo
 /// a minimizacao); senao, a cria sob demanda. Fechar a janela a destroi (libera o
 /// WebView2), entao a proxima abertura recai no caminho de criacao.
+///
+/// Posicao/tamanho sao lembrados entre aberturas: ao criar, restauramos o ultimo
+/// estado salvo (`restore_state`; no-op na 1a vez, quando cai no `inner_size`
+/// centralizado); ao fechar, salvamos o estado no `CloseRequested` — a janela
+/// ainda esta viva ali, e como o app segue no tray (nao ha "exit") o salvamento
+/// automatico do plugin no encerramento nao pegaria a geometria a tempo.
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -1349,9 +1518,36 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         .center()
         .resizable(true)
         .decorations(true)
+        // Desliga o handler NATIVO de drag-drop (de arquivos) do webview: por padrao
+        // ele intercepta os eventos e impede o drag-and-drop HTML5 da propria pagina
+        // (ex.: reordenar os cards da tela "Uso atual"), deixando o cursor "bloqueado".
+        // O app nao usa drop de arquivos, entao desligar e' seguro.
+        .disable_drag_drop_handler()
+        // Cria OCULTA: restauramos posicao/tamanho com ela escondida e so' entao
+        // damos show(), para a janela aparecer uma unica vez ja' no tamanho certo
+        // (sem o "pulo" do tamanho padrao -> tamanho salvo).
+        .visible(false)
+        // Pinta o fundo com a cor escura do app (styles.css: body #1a1915) para o
+        // WebView2 nao mostrar o flash branco enquanto o HTML/CSS ainda carrega.
+        .background_color(tauri::window::Color(26, 25, 21, 255))
         .build();
     match result {
         Ok(window) => {
+            use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
+            // Reaplica a ultima posicao/tamanho salvos (no-op na primeira vez), com
+            // a janela ainda oculta.
+            let _ = window.restore_state(StateFlags::POSITION | StateFlags::SIZE);
+            // Salva o estado ao fechar (a janela ainda esta viva aqui); como o app
+            // segue no tray (sem "exit"), o save automatico do plugin no
+            // encerramento nao pegaria a geometria a tempo.
+            let app_for_save = app.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    let _ = app_for_save.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
+                }
+            });
+            // Ja' no tamanho/posicao finais e com fundo escuro: exibe e foca.
+            let _ = window.show();
             let _ = window.set_focus();
         }
         Err(error) => handle_runtime_error(app, &format!("Falha ao abrir a janela: {error}")),
@@ -1552,6 +1748,10 @@ fn run_collection_cycle<R: Runtime>(
     } else if !had_error {
         clear_last_error(shared);
     }
+
+    // Registra uma amostra no historico (anel em memoria) para os mini-graficos da
+    // tela "Uso atual". Roda apos os dois provedores terem atualizado o snapshot.
+    push_usage_sample(shared, config.uso_atual.grafico);
 
     // Um unico refresh do tray por ciclo (os erros acima usam `record_runtime_error`,
     // que nao refresca, para nao repintar varias vezes).
@@ -1952,6 +2152,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                 taskbar_widget::set_side(config.barra_tarefas.lado_esquerdo());
                 taskbar_widget::set_font_size(config.barra_tarefas.tamanho_fonte_pt());
                 taskbar_widget::set_font_color(config.barra_tarefas.cor_fonte_rgb());
+                taskbar_widget::set_order(&config.providers.ordem);
                 let mostrar_hora = config.barra_tarefas.mostrar_hora_reset();
                 let (mostra_sessao, mostra_semanal) =
                     parse_janelas(&config.barra_tarefas.janelas);
@@ -2040,6 +2241,93 @@ fn push_send_log(
 fn clear_last_error(shared: &Arc<SharedState>) {
     let mut snapshot = lock_snapshot(shared);
     snapshot.last_error = None;
+}
+
+/// Registra uma amostra do uso atual no anel de historico (em memoria) e poda o
+/// que passou da janela de 5h. Chamado uma vez por ciclo de coleta, depois que os
+/// dois provedores ja' atualizaram o snapshot. Grava a % de cada janela por
+/// provedor, usando `None` quando o provedor esta' desabilitado ou com erro
+/// naquele instante. Uma amostra totalmente vazia (nenhum dado ainda) e' ignorada
+/// para nao abrir "furos" no comeco.
+///
+/// Com `enabled == false` (grafico desligado na tela "Uso atual"), nao grava e
+/// limpa o historico ja' acumulado — para de gravar e "exclui os dados".
+fn push_usage_sample(shared: &Arc<SharedState>, enabled: bool) {
+    let mut snapshot = lock_snapshot(shared);
+    if !enabled {
+        if !snapshot.usage_history.is_empty() {
+            snapshot.usage_history.clear();
+        }
+        return;
+    }
+    let value = |metric: &Option<UsageMetric>, weekly: bool| -> Option<f64> {
+        let metric = metric.as_ref()?;
+        if metric.status == "erro" || metric.erro.is_some() {
+            return None;
+        }
+        if weekly {
+            metric.uso_percentual_7d
+        } else {
+            Some(metric.uso_percentual)
+        }
+    };
+    let sample = UsageSample {
+        t: Utc::now().to_rfc3339(),
+        claude_5h: value(&snapshot.claude_metric, false),
+        claude_7d: value(&snapshot.claude_metric, true),
+        codex_5h: value(&snapshot.codex_metric, false),
+        codex_7d: value(&snapshot.codex_metric, true),
+    };
+    if sample.claude_5h.is_none()
+        && sample.claude_7d.is_none()
+        && sample.codex_5h.is_none()
+        && sample.codex_7d.is_none()
+    {
+        return;
+    }
+    snapshot.usage_history.push(sample);
+    prune_usage_history(&mut snapshot.usage_history);
+}
+
+/// Poda o anel de historico: descarta amostras mais velhas que a janela de 5h
+/// (relativas a' amostra mais recente) e aplica o teto de contagem.
+fn prune_usage_history(history: &mut Vec<UsageSample>) {
+    if let Some(newest) = history
+        .last()
+        .and_then(|sample| DateTime::parse_from_rfc3339(&sample.t).ok())
+    {
+        let cutoff = newest - chrono::Duration::seconds(USAGE_HISTORY_WINDOW_SECS);
+        history.retain(|sample| {
+            DateTime::parse_from_rfc3339(&sample.t)
+                .map(|when| when >= cutoff)
+                .unwrap_or(true)
+        });
+    }
+    let excess = history.len().saturating_sub(USAGE_HISTORY_MAX);
+    if excess > 0 {
+        history.drain(0..excess);
+    }
+}
+
+/// Reduz o historico a no maximo `USAGE_CHART_POINTS` pontos (stride uniforme,
+/// sempre incluindo a ultima amostra), extraindo um valor por amostra via `pick`.
+/// Pontos sem valor (provedor desabilitado/erro naquele instante) sao omitidos.
+/// Formato: `[{ "t": <iso>, "pct": <num> }, ...]`, em ordem cronologica.
+fn downsample_usage(
+    history: &[UsageSample],
+    pick: impl Fn(&UsageSample) -> Option<f64>,
+) -> Vec<Value> {
+    let n = history.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let stride = ((n + USAGE_CHART_POINTS - 1) / USAGE_CHART_POINTS).max(1);
+    history
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % stride == 0 || *i == n - 1)
+        .filter_map(|(_, sample)| pick(sample).map(|pct| json!({ "t": sample.t, "pct": pct })))
+        .collect()
 }
 
 /// Registra um erro de runtime (estado + log) SEM atualizar o tray. Usado dentro
@@ -2589,6 +2877,22 @@ fn normalize_config(config: &mut AppConfig) {
     }
     if config.servidor.porta == 0 {
         config.servidor.porta = 8770;
+    }
+    normalize_provider_order(&mut config.providers.ordem);
+}
+
+/// Sanitiza a ordem dos provedores: mantém só chaves conhecidas (`PROVIDER_KEYS`),
+/// sem duplicatas, preservando a ordem escolhida pelo usuário; depois anexa, na
+/// ordem canônica, qualquer provedor conhecido que esteja faltando. Resultado:
+/// sempre uma permutação exata dos provedores conhecidos (robusto a JSON inválido
+/// e pronto para novos provedores, que entram no fim).
+fn normalize_provider_order(order: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    order.retain(|key| PROVIDER_KEYS.contains(&key.as_str()) && seen.insert(key.clone()));
+    for &key in PROVIDER_KEYS.iter() {
+        if !order.iter().any(|existing| existing == key) {
+            order.push(key.to_string());
+        }
     }
 }
 
