@@ -336,6 +336,10 @@ function render(): void {
   el("view-modelos").classList.toggle("hide", tab !== "modelos");
   el("view-ferramentas").classList.toggle("hide", tab !== "ferramentas");
   el("view-projetos").classList.toggle("hide", tab !== "projetos");
+  // Nas abas de lista (Ferramentas/Projetos), limita o dashboard à altura visível
+  // e deixa só a própria lista rolar (ver .dash-scroll no CSS) — evita rolagem
+  // dupla (lista + janela). Nas abas Visão Geral/Modelos a tela rola normalmente.
+  el("view-dashboard").classList.toggle("dash-scroll", tab === "ferramentas" || tab === "projetos");
   if (tab === "geral") { renderCards(f.days, f.sessions); renderHeat(f.days); }
   else if (tab === "modelos") renderChart(f.days);
   else if (tab === "ferramentas") renderTools(f.days);

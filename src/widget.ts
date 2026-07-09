@@ -35,6 +35,7 @@ interface WidgetState {
   formatoReset: string;
   modo: string;
   sempreNaFrente: boolean;
+  ordem?: string[];
   paused: boolean;
   claude: ProviderUsage;
   codex: ProviderUsage;
@@ -186,10 +187,18 @@ function render(state: WidgetState): void {
     if (modo === "anelduplo") return renderProviderAnelDuplo(label, prov, mostra, janelas, mode);
     return renderProvider(label, prov, mostra, janelas, mode);
   };
-  const cards = [
-    pick("Claude", state.claude, state.mostraClaude),
-    pick("Codex", state.codex, state.mostraCodex),
-  ].filter((c): c is string => c !== null);
+  // Ordem dos provedores vinda do config (mesma da tela "Uso atual" e da barra);
+  // saneada para as chaves conhecidas, com fallback à ordem canônica.
+  const known = ["claude", "codex"];
+  const order = (state.ordem ?? []).filter((k) => known.includes(k));
+  for (const k of known) if (!order.includes(k)) order.push(k);
+  const byKey: Record<string, () => string | null> = {
+    claude: () => pick("Claude", state.claude, state.mostraClaude),
+    codex: () => pick("Codex", state.codex, state.mostraCodex),
+  };
+  const cards = order
+    .map((k) => byKey[k]?.() ?? null)
+    .filter((c): c is string => c !== null);
 
   el("wdg-cards").innerHTML = cards.length
     ? cards.join("")

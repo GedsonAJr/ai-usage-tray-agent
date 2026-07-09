@@ -129,6 +129,18 @@ svg text { fill: #9a968d; font-size: 11px; }
 .ranklist::-webkit-scrollbar-thumb { background: #3a3833; border-radius: 999px; }
 .ranklist::-webkit-scrollbar-thumb:hover { background: #4a473f; }
 .ranklist::-webkit-scrollbar-track { background: transparent; }
+/* Abas Ferramentas/Projetos (classe .dash-scroll ligada pelo dashboard.ts):
+   limita o dashboard à altura visível via flex e deixa SÓ a .ranklist rolar por
+   dentro, evitando rolagem dupla (lista + janela) ao encolher a altura. Só vale
+   nessas abas; Visão Geral/Modelos seguem com rolagem normal da janela.
+   `flex: 0 1 auto` (não cresce, só encolhe): com poucos itens o painel/lista
+   abraçam o conteúdo (sem espaço vazio dentro do container); com muitos itens ou
+   janela baixa, a lista encolhe e rola por dentro. */
+#view-dashboard.dash-scroll.view.on { display: flex; flex-direction: column; height: 100%; }
+#view-dashboard.dash-scroll > .panel { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#view-dashboard.dash-scroll #view-ferramentas:not(.hide),
+#view-dashboard.dash-scroll #view-projetos:not(.hide) { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#view-dashboard.dash-scroll .ranklist { flex: 0 1 auto; min-height: 0; max-height: none; }
 .rrow { display: contents; }
 /* Label com clamp de 2 linhas: quebra dentro da coluna (limitada a 40%) e, se
    passar de 2 linhas, corta com reticências. overflow-wrap:anywhere permite
@@ -181,13 +193,67 @@ svg text { fill: #9a968d; font-size: 11px; }
 .uwin-pct.muted { color: #6f6c64; font-size: 20px; }
 .ubar { height: 8px; background: #1c1b18; border-radius: 999px; margin: 10px 0; overflow: hidden; }
 .ubar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
-.uwin-reset { font-size: 13px; }
+.uwin-reset { font-size: 13px; margin-top: 10px; }
 .ur-line { color: #c9c5bc; }
 .ur-k { color: #9a968d; }
 .u-remain { font-weight: 600; color: #e8e6e1; }
 .u-time { font-weight: 600; color: #e8e6e1; }
 .ur-exact { color: #807c74; font-size: 12.5px; margin-top: 2px; }
 .uwin-na { color: #6f6c64; font-size: 13px; margin-top: 8px; }
+/* Cabeçalho da tela "Uso atual": título+subtítulo à esquerda, toggle à direita,
+   centralizado verticalmente contra o bloco de títulos (não só o h1). */
+.usage-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.usage-titles { min-width: 0; }
+/* Pílula que agrupa o botão "Reordenar" e o switch do gráfico no cabeçalho. Os
+   dois são segmentos alinhados dentro dela, separados por um divisor sutil. */
+.usage-head-actions { display: flex; align-items: center; gap: 6px; flex: none;
+  background: #201f1c; border: 1px solid #34322d; border-radius: 999px; padding: 10px 14px; }
+/* Divisor vertical entre "Reordenar" e "Gráfico". */
+.usage-divider { width: 1px; height: 22px; background: #34322d; flex: none; }
+/* "Reordenar" como segmento em forma de pílula (o realce acompanha a curva). */
+.usage-reorder-btn { background: transparent; border: none; color: #9a968d; font: inherit;
+  font-size: 13px; line-height: 1; padding: 8px 12px; border-radius: 999px; cursor: pointer; }
+.usage-reorder-btn:hover { background: #2e2d29; color: #c9c5bc; }
+.usage-reorder-btn.on { background: #d97757; color: #1a1915; font-weight: 600; }
+.usage-reorder-btn.on:hover { background: #e08a6d; }
+/* padding-left equilibra a distância texto→divisor com o lado do botão (que tem
+   ~14px de padding interno), deixando o divisor visualmente centralizado. */
+.usage-chart-toggle { display: inline-flex; align-items: center; gap: 8px;
+  user-select: none; color: #9a968d; font-size: 13px; flex: none; padding-left: 12px; }
+/* Modo reordenar: alça no card, cursor de "pegar" e realces de arraste/alvo. */
+.uprov-grip { color: #6f6c64; margin-right: 3px; cursor: grab; }
+#usage-cards.reordering .uprov { cursor: grab; }
+.uprov.dragging { opacity: .5; }
+.uprov.drop-target { outline: 2px dashed #d97757; outline-offset: 3px; }
+/* Modal de confirmação (ex.: aviso ao desabilitar o gráfico). Overlay centralizado
+   sobre a janela; some via classe .hide. */
+/* `display` só quando visível: sem isto, `.modal-overlay` (mesma especificidade
+   que `.hide`, porém depois no CSS) venceria o `.hide { display:none }` e o modal
+   apareceria sempre, bloqueando a tela. */
+.modal-overlay { position: fixed; inset: 0; z-index: 50; align-items: center;
+  justify-content: center; padding: 24px; background: rgba(0, 0, 0, 0.5); }
+.modal-overlay:not(.hide) { display: flex; }
+.modal { background: #232220; border: 1px solid #34322d; border-radius: 14px; padding: 20px;
+  max-width: 400px; width: 100%; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); }
+.modal-title { font-size: 17px; font-weight: 600; color: #f2f0ea; margin-bottom: 10px; }
+.modal-body { color: #c9c5bc; font-size: 14px; line-height: 1.5; }
+.modal-check { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: #9a968d;
+  font-size: 13px; cursor: pointer; user-select: none; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+/* Mini gráfico de linha da % ao longo das últimas ~5h (tela "Uso atual"). Fica
+   logo abaixo da barra de progresso, numa moldura própria (fundo escuro + borda)
+   para delimitar bem onde a área de plotagem começa e termina. */
+.uchart { margin-top: 10px; background: #1c1b18;
+  border-radius: 8px; padding: 8px 8px 4px; }
+.uchart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.uchart-svg .uchart-guide { pointer-events: none; }
+.uchart-svg .uchart-ylab { fill: #7a766d; font-size: 9px; }
+/* padding-left alinha o rótulo "-Xh" com o início do gráfico (após a régua Y,
+   que ocupa ~7% da largura); "agora" fica na borda direita = fim do gráfico. */
+.uchart-x { display: flex; justify-content: space-between; margin-top: 1px;
+  padding-left: 7%; color: #6f6c64; font-size: 10.5px; letter-spacing: .2px; }
+.uchart-na { margin-top: 10px; background: #1c1b18;
+  border-radius: 8px; padding: 14px 10px; color: #6f6c64; font-size: 12px; text-align: center; }
 .usage-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .usage-footer .foot { flex: 1; margin-top: 0; }
 

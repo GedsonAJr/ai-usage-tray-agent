@@ -78,7 +78,12 @@ Exemplo:
       "authMode": "manual",
       "organizationId": "org_exemplo",
       "cookie": "sessionKey=..."
-    }
+    },
+    "ordem": ["claude", "codex"]
+  },
+  "usoAtual": {
+    "grafico": true,
+    "avisarAoDesligar": true
   },
   "barraTarefas": {
     "lado": "direita",
@@ -159,7 +164,9 @@ Itens do menu:
 A interface é uma janela nativa (webview do Tauri), aberta pelo clique esquerdo
 no tray ou pelo item **Abrir**. Não usa navegador nem servidor HTTP local: o
 frontend conversa com o backend Rust por comandos (IPC). Um menu lateral troca
-entre as seções. Fechar pela janela (X) **esconde** o app (continua no tray).
+entre as seções. Fechar pela janela (X) recolhe o app para o **tray** (a janela é
+fechada, mas o app continua rodando); ao reabrir, ela volta no **tamanho e posição**
+em que você a deixou (lembrados entre aberturas via `tauri-plugin-window-state`).
 
 ### Envio de dados
 
@@ -202,6 +209,30 @@ Mostra, para **Claude** e **Codex**, o uso da **sessão
 subtítulo da página traz o **"Atualizado há Xs"** do dado em cache (sobe ao vivo
 e zera a cada nova coleta). Os dados vêm do comando `get_usage` (lê o mesmo
 snapshot do tray/barra, sem rede).
+
+Abaixo de cada janela há um **mini gráfico de linha** com a evolução da
+porcentagem de uso ao longo das **últimas ~5 horas** (passe o mouse para ver o
+horário e o valor de cada ponto). O histórico é mantido **só em memória** pelo
+backend (um anel de amostras, uma por coleta, podado a 5h) e vai junto no
+`get_usage`; por ser em memória, ele **zera quando o app é fechado** e começa a
+preencher de novo nas próximas coletas — por isso a série semanal (7d), que varia
+pouco em 5h, aparece quase plana nessa janela.
+
+No cabeçalho da página, uma pílula reúne dois controles:
+
+- **Gráfico** (interruptor): mostra/oculta os mini gráficos. Ao **desligar**, o
+  backend **para de gravar e descarta** o histórico em memória (aparece um aviso de
+  perda de dados, com "Não perguntar novamente"). É persistido em
+  `providers`/`usoAtual.grafico` no `config.json` (gravado pelo comando
+  `set_usage_chart`, fora do auto-save das Configurações).
+- **Reordenar**: entra no modo de reordenação — os cards ganham uma alça e ficam
+  **arrastáveis**; arraste um sobre o outro para trocar a ordem. A ordem é uma
+  **única configuração** (`providers.ordem` no `config.json`, via
+  `set_providers_order`) que vale também para o **widget** e a **barra de tarefas**.
+  É normalizada para conter exatamente os provedores conhecidos, então novos
+  provedores entram no fim automaticamente.
+
+Os dados vêm do comando `get_usage` (lê o mesmo snapshot do tray/barra, sem rede).
 
 ### Dashboard Claude
 

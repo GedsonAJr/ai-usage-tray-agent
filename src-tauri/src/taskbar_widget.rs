@@ -241,6 +241,26 @@ pub fn set_provider(key: &str, enabled: bool, detail: String) {
     }
 }
 
+/// Ordem de exibição dos provedores (chaves), aplicada só ao POSICIONAMENTO. O
+/// `STATE` mantém a ordem fixa de criação — cada janela é ligada ao seu índice para
+/// pintar o provedor certo (ver wnd_proc/paint); reordenar o `STATE` embaralharia
+/// o conteúdo das janelas. Por isso a ordem vive à parte e só afeta o layout.
+static ORDER: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn order_lock() -> std::sync::MutexGuard<'static, Vec<String>> {
+    ORDER
+        .get_or_init(|| Mutex::new(SLOTS.iter().map(|(key, _)| key.to_string()).collect()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Define a ordem de exibição (esquerda→direita) por chave de provedor. Só guarda a
+/// lista; o `position_widgets` ordena o layout por ela no próximo tick (~1s). Chaves
+/// desconhecidas/ausentes são tratadas pela própria ordenação (vão para o fim).
+pub fn set_order(order: &[String]) {
+    *order_lock() = order.to_vec();
+}
+
 fn run_thread() {
     unsafe {
         register_class();
@@ -449,13 +469,25 @@ unsafe fn position_widgets(taskbar: HWND) {
     }
 
     // Lista de widgets habilitados, na ordem da esquerda para a direita.
-    let layout: Vec<(usize, isize, String)> = {
+    // Monta a lista de widgets habilitados e a ORDENA pela ordem configurada (por
+    // chave). O `index` continua sendo o índice de criação no STATE (usado para a
+    // janela/paint e o cache de cor); só a ordem de iteração — e portanto o
+    // posicionamento — muda. Leva `label`/`key` de cada slot para não depender do
+    // `SLOTS[index]` (que assumiria a ordem canônica fixa).
+    let order = order_lock().clone();
+    let layout: Vec<(usize, isize, String, &'static str)> = {
         let slots = lock_state();
-        slots
+        let mut rows: Vec<(usize, isize, String, &'static str, &'static str)> = slots
             .iter()
             .enumerate()
             .filter(|(_, slot)| slot.enabled && slot.hwnd != 0)
-            .map(|(index, slot)| (index, slot.hwnd, slot.detail.clone()))
+            .map(|(index, slot)| (index, slot.hwnd, slot.detail.clone(), slot.label, slot.key))
+            .collect();
+        rows.sort_by_key(|(_, _, _, _, key)| {
+            order.iter().position(|k| k == key).unwrap_or(usize::MAX)
+        });
+        rows.into_iter()
+            .map(|(index, hwnd, detail, label, _key)| (index, hwnd, detail, label))
             .collect()
     };
     if layout.is_empty() {
@@ -494,8 +526,7 @@ unsafe fn position_widgets(taskbar: HWND) {
         }
         let mut x_left = boundary + gap + offset;
         // Posiciona da esquerda para a direita (o primeiro da lista fica mais a esquerda).
-        for (index, hwnd, detail) in layout.iter() {
-            let label = SLOTS[*index].1;
+        for (index, hwnd, detail, label) in layout.iter() {
             let width = measure_text(label, font, scale).max(measure_text(detail, font, scale));
             let x = x_left.max(0);
             placements.push((*index, *hwnd, x, width));
@@ -523,8 +554,7 @@ unsafe fn position_widgets(taskbar: HWND) {
         }
         let mut x_right = boundary - gap + offset;
         // Posiciona da direita para a esquerda (o ultimo da lista fica mais a direita).
-        for (index, hwnd, detail) in layout.iter().rev() {
-            let label = SLOTS[*index].1;
+        for (index, hwnd, detail, label) in layout.iter().rev() {
             let width = measure_text(label, font, scale).max(measure_text(detail, font, scale));
             let x = (x_right - width).max(0);
             placements.push((*index, *hwnd, x, width));
