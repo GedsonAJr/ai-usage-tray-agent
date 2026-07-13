@@ -504,6 +504,7 @@ struct OpenAiAccess {
 #[derive(Debug, Deserialize)]
 struct OpenAiTokens {
     access_token: Option<String>,
+    account_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1862,18 +1863,28 @@ fn collect_codex_metric(
         .map_err(|error| format!("Falha ao ler auth.json do Codex: {error}"))?;
     let auth: OpenCodeAuth =
         serde_json::from_str(&auth_raw).map_err(|error| format!("auth.json invalido: {error}"))?;
-    let token = auth
-        .openai
-        .and_then(|value| value.access)
-        .or_else(|| auth.tokens.and_then(|value| value.access_token))
+    let openai_access = auth.openai.and_then(|value| value.access);
+    // Consome `auth.tokens` uma unica vez para pegar access_token + account_id.
+    let (tokens_access, account_id) = auth
+        .tokens
+        .map_or((None, None), |value| (value.access_token, value.account_id));
+    let token = openai_access
+        .or(tokens_access)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             "Campos openai.access ou tokens.access_token nao foram encontrados no auth.json do Codex."
                 .to_string()
         })?;
+    // O login pelo navegador gera token multi-org e salva `tokens.account_id`. Sem
+    // o header `chatgpt-account-id` o backend nao resolve a janela semanal
+    // (secondary_window) desse token, entao o uso 7d volta nulo (espelha o
+    // dashboard, que ja envia esse header).
+    let account_id = account_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
-    let response = client
+    let mut request = client
         .get("https://chatgpt.com/backend-api/wham/usage")
         .header("accept", "*/*")
         .header("accept-language", "pt-BR,pt;q=0.9,en;q=0.8")
@@ -1882,7 +1893,12 @@ fn collect_codex_metric(
         .header("pragma", "no-cache")
         .header("oai-language", "pt-BR")
         .header("x-openai-target-path", "/backend-api/wham/usage")
-        .header("x-openai-target-route", "/backend-api/wham/usage")
+        .header("x-openai-target-route", "/backend-api/wham/usage");
+    if let Some(account_id) = account_id {
+        request = request.header("chatgpt-account-id", account_id);
+    }
+
+    let response = request
         .send()
         .map_err(|error| format!("Falha HTTP ao consultar Codex: {error}"))?;
 

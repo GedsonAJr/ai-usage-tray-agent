@@ -83,9 +83,22 @@ git fetch upstream && git switch main && git merge upstream/main && git push ori
 - `[Não lançado]` no topo = a versão mais nova ainda não promovida; o app a mapeia para a
   versão alvo ao exibir.
 - A cada novo ciclo, **antes** de registrar mudanças novas:
-  1. Promova a `[Não lançado]` anterior para `## [0.2.<run>] - AAAA-MM-DD` (use o `version`
-     do `latest.json` da release, ou `0.2.<run_number>` da run do Release —
-     `gh run list --workflow=release.yml`). Se a `[Não lançado]` estava vazia, não crie seção.
+  1. Promova a `[Não lançado]` anterior para `## [0.2.<run>] - AAAA-MM-DD`. A versão é
+     `0.2.<run_number>` da **run de Release do upstream** (a release só roda lá — ver seção 2),
+     que corresponde à última PR mergeada no `main` do upstream. Pegue o `run_number` e a data
+     com (o `--repo` é obrigatório: você está no fork):
+
+     ```sh
+     gh run list --repo wzuqui/ai-usage-tray-agent --workflow=release.yml -L 1 \
+       --json number,displayTitle,createdAt
+     # versão = 0.2.<number>;  data (AAAA-MM-DD) = o dia de createdAt
+     ```
+
+     > ⚠️ **Não confie na saída em tabela do `gh run list`.** A coluna numérica ali é o
+     > **run ID** (ex.: `29020790682`), não o `run_number` que vira a versão. Sempre use
+     > `--json number` (ou `gh run view <id> --json number`) para pegar o número certo.
+
+     Se a `[Não lançado]` estava vazia, não crie seção.
   2. Recrie uma `[Não lançado]` vazia no topo e adicione ali as entradas novas.
 - **Cuidado com o parser** (`parseChangelog`/`renderMarkdown` em `src/changelog.ts`): a guia
   "Como manter" no topo é blockquote (`>`), nunca `## `; subtítulos de categoria usam `### `
