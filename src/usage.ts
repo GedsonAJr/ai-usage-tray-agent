@@ -256,7 +256,7 @@ function tick(): void {
 /// tamanho/última amostra de cada série do histórico.
 function signature(d: Usage): string {
   const m = (x: UsageMetric | null): string =>
-    x ? `${x.coletado_em}|${x.uso_percentual}|${x.uso_percentual_7d ?? ""}|${x.status}|${x.erro ?? ""}` : "none";
+    x ? `${x.coletado_em}|${x.uso_percentual ?? ""}|${x.uso_percentual_7d ?? ""}|${x.status}|${x.erro ?? ""}` : "none";
   const h = (s?: HistPoint[]): string => (s && s.length ? `${s.length}:${s[s.length - 1].t}` : "0");
   const hi = d.history;
   return [
