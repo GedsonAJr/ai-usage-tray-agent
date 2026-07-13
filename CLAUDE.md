@@ -17,7 +17,12 @@ e as armadilhas técnicas já aprendidas. Para arquitetura e telas, veja o
    (`git fetch upstream` antes — o fork pode estar atrás).
 2. **Atualize o `CHANGELOG.md` antes de mergear** — o app lê esse arquivo em
    runtime para as Novidades/OTA. Cada item em **uma única linha**, voltado ao
-   usuário final (padrão Keep a Changelog), na seção `[Não lançado]`.
+   usuário final (padrão Keep a Changelog). O ciclo é **cumulativo**: se o
+   `[Não lançado]` já tem itens de uma versão que **já foi publicada**, primeiro
+   **promova-o** para `## [0.2.<run>] - AAAA-MM-DD` e recrie um `[Não lançado]`
+   vazio no topo; só então adicione ali a sua mudança. Como descobrir a última
+   versão publicada (`0.2.<run_number>`) está no `ONBOARDING.md`, seção
+   "CHANGELOG.md — é runtime" (passo 1 da promoção).
 3. **A release sai só do upstream**, no merge para o `main` dele. Não tente
    publicar de outra forma; não mexa na chave de assinatura do updater.
 4. **Doc no mesmo PR da feature**: confira se `README.md` (telas/comandos/estrutura)

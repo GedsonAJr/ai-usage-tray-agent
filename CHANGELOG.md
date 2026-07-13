@@ -18,13 +18,21 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 > - A cada novo ciclo, **antes** de registrar novas mudanças, promova a
 >   `[Não lançado]` anterior para uma seção da versão que foi publicada
 >   (`## [0.2.<run>] - AAAA-MM-DD`) e recrie uma `[Não lançado]` vazia no topo.
->   A versão publicada é o campo `version` do `latest.json` da release (ou
->   `0.2.<run_number>` da execução do workflow de release).
+>   A versão publicada é `0.2.<run_number>` da última **run de Release do upstream**;
+>   pegue número e data com `gh run list --repo wzuqui/ai-usage-tray-agent
+>   --workflow=release.yml -L 1 --json number,displayTitle,createdAt` (⚠️ a saída em
+>   tabela do `gh run list` mostra o run **ID**, não o `run_number` — use `--json number`).
+>   Passo a passo no `ONBOARDING.md`, seção "CHANGELOG.md — é runtime".
 > - Escreva cada item em **uma única linha** (sem quebra manual): o aviso de
 >   atualização é renderizado pelo app **já instalado** do usuário, e renderers
 >   antigos podem exibir itens multi-linha de forma quebrada.
 
 ## [Não lançado]
+
+### Corrigido
+- Codex conectado pelo navegador: a janela de uso semanal (7d) voltou a aparecer em vez de "Sem dados desta janela".
+
+## [0.2.49] - 2026-07-09
 
 ### Adicionado
 - Tela Uso atual: cada janela (sessão 5h e semanal 7d) ganhou um mini gráfico de linha com a evolução da porcentagem de uso nas últimas 5 horas, com detalhe de horário e valor ao passar o mouse.
