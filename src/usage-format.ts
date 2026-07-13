@@ -3,8 +3,10 @@
 
 export interface UsageMetric {
   ferramenta: string;
-  uso_percentual: number;
-  restante_percentual: number;
+  // Sessão (5h): opcional — contas cujo plano só expõe a janela semanal (7d) não
+  // têm janela de sessão, e o backend omite este campo.
+  uso_percentual?: number;
+  restante_percentual?: number;
   status: string;
   coletado_em: string;
   reset_em: string | null;

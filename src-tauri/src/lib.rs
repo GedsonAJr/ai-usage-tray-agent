@@ -357,8 +357,12 @@ impl Default for ClaudeConfig {
 struct UsageMetric {
     usuario: String,
     ferramenta: String,
-    uso_percentual: f64,
-    restante_percentual: f64,
+    // Janela de sessao (5h). Opcional: contas cujo plano so' expõe a janela semanal
+    // (7d) nao tem janela de sessao, e a UI mostra "Sem dados desta janela".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    uso_percentual: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restante_percentual: Option<f64>,
     status: String,
     coletado_em: String,
     reset_em: Option<String>,
@@ -514,20 +518,20 @@ struct OpenAiUsageResponse {
 
 #[derive(Debug, Deserialize)]
 struct OpenAiRateLimit {
-    primary_window: Option<OpenAiPrimaryWindow>,
-    secondary_window: Option<OpenAiSecondaryWindow>,
+    primary_window: Option<OpenAiWindow>,
+    secondary_window: Option<OpenAiWindow>,
 }
 
+/// Uma janela de limite do Codex. A POSICAO (primary/secondary) NAO e' confiavel:
+/// a OpenAI suspendeu temporariamente o limite de sessao (5h) e passou a devolver
+/// so' o semanal (7d) em `primary_window`, com `secondary_window` ausente. Por isso
+/// classificamos cada janela pela duracao (`limit_window_seconds`): ~5h -> sessao;
+/// ~7d -> semanal. Assim volta a funcionar sozinho se/quando o 5h retornar.
 #[derive(Debug, Deserialize)]
-struct OpenAiPrimaryWindow {
+struct OpenAiWindow {
     used_percent: Option<f64>,
     reset_at: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiSecondaryWindow {
-    used_percent: Option<f64>,
-    reset_at: Option<i64>,
+    limit_window_seconds: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1917,38 +1921,56 @@ fn collect_codex_metric(
         .rate_limit
         .ok_or_else(|| "rate_limit nao foi encontrado na resposta do Codex.".to_string())?;
 
-    let primary_window = rate_limit
-        .primary_window
-        .ok_or_else(|| "rate_limit.primary_window nao foi encontrado na resposta do Codex.".to_string())?;
+    // Classifica cada janela presente pela DURACAO, nao pela posicao (primary/
+    // secondary): a janela com >= 1 dia de duracao e' a semanal (7d, ~604800s);
+    // as demais sao a de sessao (5h, ~18000s). Hoje a OpenAI suspendeu o 5h e so'
+    // devolve o semanal em `primary_window` (sem `secondary_window`) — a
+    // classificacao por duracao acerta esse caso e volta a mostrar o 5h sozinha se
+    // ele retornar. Fallback: sem `limit_window_seconds`, mantem a ordem legada
+    // (1a janela = sessao, 2a = semanal).
+    const WEEKLY_MIN_SECONDS: i64 = 24 * 60 * 60;
+    let mut session_window: Option<&OpenAiWindow> = None;
+    let mut weekly_window: Option<&OpenAiWindow> = None;
+    for (index, window) in [
+        rate_limit.primary_window.as_ref(),
+        rate_limit.secondary_window.as_ref(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let Some(window) = window else { continue };
+        let is_weekly = match window.limit_window_seconds {
+            Some(seconds) => seconds >= WEEKLY_MIN_SECONDS,
+            None => index == 1,
+        };
+        if is_weekly {
+            weekly_window.get_or_insert(window);
+        } else {
+            session_window.get_or_insert(window);
+        }
+    }
 
-    let used_percent = primary_window
-        .used_percent
-        .ok_or_else(|| {
-            "rate_limit.primary_window.used_percent nao foi encontrado na resposta do Codex."
-                .to_string()
-        })?;
+    if session_window.is_none() && weekly_window.is_none() {
+        return Err("rate_limit sem janelas de uso na resposta do Codex.".to_string());
+    }
 
-    let secondary_used_percent = rate_limit
-        .secondary_window
-        .as_ref()
-        .and_then(|value| value.used_percent);
-    let secondary_reset_at = rate_limit
-        .secondary_window
-        .as_ref()
-        .and_then(|value| value.reset_at);
+    let session_used = session_window.and_then(|window| window.used_percent);
+    let session_reset = session_window.and_then(|window| window.reset_at);
+    let weekly_used = weekly_window.and_then(|window| window.used_percent);
+    let weekly_reset = weekly_window.and_then(|window| window.reset_at);
 
     Ok(UsageMetric {
         usuario: normalized_user(&config.usuario),
         ferramenta: "codex".to_string(),
-        uso_percentual: round_percent(used_percent),
-        restante_percentual: remaining_percent(used_percent),
+        uso_percentual: session_used.map(round_percent),
+        restante_percentual: session_used.map(remaining_percent),
         status: "ok".to_string(),
         coletado_em: Utc::now().to_rfc3339(),
-        reset_em: primary_window.reset_at.and_then(timestamp_seconds_to_iso),
+        reset_em: session_reset.and_then(timestamp_seconds_to_iso),
         erro: None,
-        uso_percentual_7d: secondary_used_percent.map(round_percent),
-        restante_percentual_7d: secondary_used_percent.map(remaining_percent),
-        reset_em_7d: secondary_reset_at.and_then(timestamp_seconds_to_iso),
+        uso_percentual_7d: weekly_used.map(round_percent),
+        restante_percentual_7d: weekly_used.map(remaining_percent),
+        reset_em_7d: weekly_reset.and_then(timestamp_seconds_to_iso),
     })
 }
 
@@ -2040,8 +2062,8 @@ fn collect_claude_metric(
     Ok(UsageMetric {
         usuario: normalized_user(&config.usuario),
         ferramenta: "claude".to_string(),
-        uso_percentual: round_percent(utilization),
-        restante_percentual: remaining_percent(utilization),
+        uso_percentual: Some(round_percent(utilization)),
+        restante_percentual: Some(remaining_percent(utilization)),
         status: "ok".to_string(),
         coletado_em: Utc::now().to_rfc3339(),
         reset_em: five_hour.resets_at,
@@ -2080,12 +2102,16 @@ fn send_metric_to_loki(
     let host = host_name();
 
     let mut body = json!({
-        "uso_percentual": metric.uso_percentual,
-        "restante_percentual": metric.restante_percentual,
         "status": metric.status,
         "reset_em": metric.reset_em
     });
 
+    if let Some(value) = metric.uso_percentual {
+        body["uso_percentual"] = json!(value);
+    }
+    if let Some(value) = metric.restante_percentual {
+        body["restante_percentual"] = json!(value);
+    }
     if let Some(error) = &metric.erro {
         body["erro"] = Value::String(error.clone());
     }
@@ -2284,7 +2310,7 @@ fn push_usage_sample(shared: &Arc<SharedState>, enabled: bool) {
         if weekly {
             metric.uso_percentual_7d
         } else {
-            Some(metric.uso_percentual)
+            metric.uso_percentual
         }
     };
     let sample = UsageSample {
@@ -2675,8 +2701,8 @@ fn build_error_metric(usuario: &str, ferramenta: &str, erro: &str) -> UsageMetri
     UsageMetric {
         usuario: normalized_user(usuario),
         ferramenta: ferramenta.to_string(),
-        uso_percentual: 0.0,
-        restante_percentual: 100.0,
+        uso_percentual: Some(0.0),
+        restante_percentual: Some(100.0),
         status: "erro".to_string(),
         coletado_em: Utc::now().to_rfc3339(),
         reset_em: None,
@@ -2701,10 +2727,13 @@ fn metric_text(metric: Option<&UsageMetric>) -> String {
     let Some(metric) = metric else {
         return "--".to_string();
     };
-    let session = format!("{:.1}%", metric.uso_percentual);
-    match metric.uso_percentual_7d {
-        Some(seven_day) => format!("{session} | {:.1}% (7d)", seven_day),
-        None => session,
+    let session = metric.uso_percentual.map(|value| format!("{value:.1}%"));
+    let weekly = metric.uso_percentual_7d.map(|value| format!("{value:.1}% (7d)"));
+    match (session, weekly) {
+        (Some(session), Some(weekly)) => format!("{session} | {weekly}"),
+        (Some(session), None) => session,
+        (None, Some(weekly)) => weekly,
+        (None, None) => "--".to_string(),
     }
 }
 
@@ -2724,7 +2753,7 @@ fn parse_janelas(value: &str) -> (bool, bool) {
 /// usa o tempo restante (`20% (2:36h) | 50% (2d)`); com `true` usa a hora/data
 /// exata do reset (`20% (19:20) | 50% (22/06, 19:59)`). `mostra_sessao`/
 /// `mostra_semanal` escolhem as janelas (5h/7d); com uma so', o separador "|"
-/// some. Se a janela semanal nao tem dados, cai na sessao.
+/// some. Se a janela escolhida nao tem dados, cai na outra que estiver disponivel.
 #[cfg(target_os = "windows")]
 fn widget_detail(
     metric: Option<&UsageMetric>,
@@ -2747,21 +2776,28 @@ fn widget_detail(
         }
     };
 
-    let session = format!("{:.0}%{}", metric.uso_percentual, suffix(metric.reset_em.as_deref()));
+    let session = metric
+        .uso_percentual
+        .map(|value| format!("{:.0}%{}", value, suffix(metric.reset_em.as_deref())));
+    let weekly = metric
+        .uso_percentual_7d
+        .map(|value| format!("{:.0}%{}", value, suffix(metric.reset_em_7d.as_deref())));
 
     let mut parts: Vec<String> = Vec::new();
     if mostra_sessao {
-        parts.push(session.clone());
-    }
-    if mostra_semanal {
-        if let Some(weekly) = metric.uso_percentual_7d {
-            parts.push(format!("{:.0}%{}", weekly, suffix(metric.reset_em_7d.as_deref())));
+        if let Some(session) = &session {
+            parts.push(session.clone());
         }
     }
-    // Sem nenhuma parte (ex.: so' semanal escolhido mas sem dados de 7d): mostra
-    // a sessao para nao ficar vazio.
+    if mostra_semanal {
+        if let Some(weekly) = &weekly {
+            parts.push(weekly.clone());
+        }
+    }
+    // Sem nenhuma parte (ex.: janela escolhida sem dados): cai na que existir, ou
+    // "--" se nenhuma tem dados.
     if parts.is_empty() {
-        return session;
+        return session.or(weekly).unwrap_or_else(|| "--".to_string());
     }
     parts.join(" | ")
 }

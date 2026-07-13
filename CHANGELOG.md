@@ -29,8 +29,11 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Alterado
+- Codex: a OpenAI suspendeu temporariamente o limite de sessão (5h), deixando apenas o semanal (7d) — enquanto durar, a janela "Sessão (5h)" fica sem dados e o acompanhamento segue pelo semanal.
+
 ### Corrigido
-- Codex conectado pelo navegador: a janela de uso semanal (7d) voltou a aparecer em vez de "Sem dados desta janela".
+- Codex conectado pelo navegador: o uso semanal (7d) voltou a aparecer corretamente, em vez de ficar em branco.
 
 ## [0.2.49] - 2026-07-09
 
