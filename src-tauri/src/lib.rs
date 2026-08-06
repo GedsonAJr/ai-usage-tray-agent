@@ -1,9 +1,9 @@
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{BufRead, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -339,6 +339,8 @@ struct ClaudeConfig {
     /// `cookie`) ou "navegador" (login pelo navegador; sessao + org no arquivo
     /// gerenciado `claude-auth.json`, ver `claude_auth`). Desconhecido = "manual".
     auth_mode: String,
+    /// Reabertura automatica da janela de sessao (5h). Ver `SessaoAutoConfig`.
+    sessao_auto: SessaoAutoConfig,
 }
 
 impl Default for ClaudeConfig {
@@ -349,9 +351,38 @@ impl Default for ClaudeConfig {
             organization_id: String::new(),
             cookie: String::new(),
             auth_mode: "manual".to_string(),
+            sessao_auto: SessaoAutoConfig::default(),
         }
     }
 }
+
+/// Reabertura automatica da janela de sessao (5h) do Claude.
+///
+/// A cota da assinatura e' contada em janelas de 5h que so' comecam quando voce
+/// manda a primeira mensagem — enquanto nao ha' janela aberta, a API devolve
+/// `five_hour.resets_at: null`. Quem quer aproveitar o dia inteiro precisa abrir
+/// a janela na mao ("Oi") toda vez que a anterior expira. Com isto ligado, o app
+/// percebe que nao ha' janela e manda essa mensagem sozinho.
+///
+/// O disparo usa o **Claude Code CLI** (`claude -p`), que autentica pelo OAuth da
+/// assinatura em `~/.claude` — ou seja, consome a mesma cota que o app mede. Uma
+/// chave `ANTHROPIC_API_KEY` no ambiente desviaria a chamada para a API paga (pool
+/// separado, que nao abre janela nenhuma), entao ela e' removida do processo filho.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct SessaoAutoConfig {
+    /// Desligado por padrao (o `false` derivado): a funcao age na conta do usuario
+    /// e consome cota, entao so' roda com opt-in explicito nas Configuracoes.
+    habilitado: bool,
+    /// Caminho do executavel do Claude Code CLI. Vazio = descobrir sozinho
+    /// (ver `resolve_claude_cli`). Serve de escape para instalacoes fora do PATH
+    /// do processo do app — comum quando ele sobe pelo autostart.
+    caminho_cli: String,
+}
+
+/// Mensagem que abre a janela. Fixa: o objetivo e' so' carimbar o inicio da
+/// janela, nao obter uma resposta util — e quanto mais curta, menos cota consome.
+const SESSAO_AUTO_MENSAGEM: &str = "Oi";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UsageMetric {
@@ -464,6 +495,45 @@ struct SharedState {
     force_pending: AtomicBool,
     /// Ultima atualizacao detectada, exibida pela janela `update.html`.
     pending_update: Mutex<Option<PendingUpdate>>,
+    /// Reabertura automatica da sessao do Claude: cooldown + resultado da ultima
+    /// tentativa (exibido na aba Claude das Configuracoes).
+    sessao_auto: Mutex<SessaoAutoState>,
+}
+
+/// Estado em memoria da reabertura automatica. Nao vai para o disco: e' so' o
+/// suficiente para nao disparar duas vezes seguidas e para a UI dizer o que
+/// aconteceu na ultima tentativa.
+#[derive(Debug, Default)]
+struct SessaoAutoState {
+    /// Quando a ultima tentativa comecou. Base do cooldown.
+    last_attempt: Option<Instant>,
+    /// Ha' uma chamada ao CLI em andamento (ela roda fora do ciclo de coleta).
+    running: bool,
+    status: SessaoAutoStatus,
+}
+
+/// Resultado da ultima tentativa de reabrir a sessao, exposto a' UI.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessaoAutoStatus {
+    /// RFC 3339 (UTC) do inicio da ultima tentativa. `None` = nunca tentou.
+    ultima_tentativa_em: Option<String>,
+    /// `true` quando a ultima tentativa terminou sem erro.
+    ultimo_ok: Option<bool>,
+    /// Motivo da falha da ultima tentativa; `None` quando deu certo.
+    ultimo_erro: Option<String>,
+    /// Ha' uma chamada ao CLI em andamento. A UI usa para mostrar "Testando…" e
+    /// saber quando parar de consultar o resultado.
+    em_execucao: bool,
+}
+
+/// Trava o estado da reabertura automatica, recuperando de envenenamento — mesma
+/// estrategia de `lock_snapshot`.
+fn lock_sessao_auto(shared: &SharedState) -> std::sync::MutexGuard<'_, SessaoAutoState> {
+    shared
+        .sessao_auto
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Trava o snapshot recuperando de um eventual envenenamento do Mutex (panic
@@ -652,6 +722,7 @@ pub fn run() {
                 stop: AtomicBool::new(false),
                 force_pending: AtomicBool::new(false),
                 pending_update: Mutex::new(None),
+                sessao_auto: Mutex::new(SessaoAutoState::default()),
             });
 
             app.manage(paths.clone());
@@ -747,12 +818,20 @@ struct SaveSettings {
 fn settings_value<R: Runtime>(app: &AppHandle<R>, paths: &RuntimePaths) -> Value {
     let config = read_config(paths);
     let autostart = app.autolaunch().is_enabled().unwrap_or(false);
+    // Resultado da ultima reabertura automatica de sessao, para a aba Claude
+    // mostrar se funcionou (e o porque quando nao). Vive so' em memoria, entao
+    // pode nao existir ainda (app recem-aberto).
+    let sessao_auto_status = app
+        .try_state::<Arc<SharedState>>()
+        .map(|shared| lock_sessao_auto(&shared).status.clone())
+        .unwrap_or_default();
 
     let mut value = json!({
         "autostart": autostart,
         "os": std::env::consts::OS,
         "autostartLabel": autostart_label(),
         "appVersion": app.package_info().version.to_string(),
+        "sessaoAutoStatus": sessao_auto_status,
     });
     value["config"] = serde_json::to_value(&config).unwrap_or(Value::Null);
     value
@@ -1758,10 +1837,385 @@ fn run_collection_cycle<R: Runtime>(
     // tela "Uso atual". Roda apos os dois provedores terem atualizado o snapshot.
     push_usage_sample(shared, config.uso_atual.grafico);
 
+    // Se a janela de 5h do Claude expirou e a reabertura automatica esta' ligada,
+    // manda a mensagem que abre uma nova. Nao bloqueia: a chamada ao CLI vai para
+    // uma thread propria (ver `maybe_reopen_claude_session`).
+    maybe_reopen_claude_session(paths, shared, &config);
+
     // Um unico refresh do tray por ciclo (os erros acima usam `record_runtime_error`,
     // que nao refresca, para nao repintar varias vezes).
     refresh_tray(app, shared).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Intervalo minimo entre duas tentativas de reabrir a sessao. Cobre o tempo do
+/// CLI responder mais a propagacao na API (a janela aparece na coleta seguinte),
+/// e evita martelar quando a tentativa falha (ex.: CLI ausente).
+const SESSAO_AUTO_COOLDOWN: Duration = Duration::from_secs(180);
+
+/// Teto para a chamada ao CLI. Passou disso, o processo e' morto e a tentativa
+/// vira falha — nao pode ficar um `claude` pendurado a cada janela.
+const SESSAO_AUTO_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Decide se e' hora de reabrir a janela de sessao do Claude e, se for, dispara a
+/// chamada **fora** do ciclo de coleta (o CLI leva segundos; segurar o
+/// `cycle_lock` congelaria tray/barra/widget nesse intervalo).
+///
+/// So' age sobre uma coleta bem-sucedida que diga explicitamente que nao ha'
+/// janela (`status == "ok"` e `reset_em == None`). Falha de coleta ou credencial
+/// expirada **nao** sao sinal de janela fechada — disparar ali gastaria cota a
+/// toa, possivelmente em looping.
+fn maybe_reopen_claude_session(
+    paths: &RuntimePaths,
+    shared: &Arc<SharedState>,
+    config: &AppConfig,
+) {
+    let claude = &config.providers.claude;
+    if !claude.habilitado || !claude.sessao_auto.habilitado {
+        return;
+    }
+
+    {
+        let snapshot = lock_snapshot(shared);
+        let sem_janela = snapshot
+            .claude_metric
+            .as_ref()
+            .is_some_and(|metric| metric.status == "ok" && metric.reset_em.is_none());
+        if !sem_janela {
+            return;
+        }
+    }
+
+    // Marca a tentativa com o lock ainda tomado, para que dois ciclos nao disparem
+    // o mesmo "Oi" em paralelo.
+    {
+        let mut state = lock_sessao_auto(shared);
+        if state.running
+            || state
+                .last_attempt
+                .is_some_and(|at| at.elapsed() < SESSAO_AUTO_COOLDOWN)
+        {
+            return;
+        }
+        state.last_attempt = Some(Instant::now());
+        state.running = true;
+        state.status.em_execucao = true;
+        state.status.ultima_tentativa_em = Some(Utc::now().to_rfc3339());
+    }
+
+    let paths = paths.clone();
+    let shared = shared.clone();
+    let sessao_auto = claude.sessao_auto.clone();
+    thread::spawn(move || {
+        let resultado = run_claude_session_opener(&paths, &sessao_auto);
+
+        let mut state = lock_sessao_auto(&shared);
+        state.running = false;
+        state.status.em_execucao = false;
+        // Erro repetido (ex.: CLI ausente a cada cooldown) so' vai ao log quando
+        // muda, para nao encher o arquivo de linhas identicas.
+        let erro_novo = match (&resultado, &state.status.ultimo_erro) {
+            (Err(atual), Some(anterior)) => atual != anterior,
+            _ => true,
+        };
+        match resultado {
+            Ok(()) => {
+                state.status.ultimo_ok = Some(true);
+                state.status.ultimo_erro = None;
+                let _ = append_log_line(
+                    &paths,
+                    "info",
+                    "Sessao do Claude reaberta automaticamente.",
+                    Some(json!({ "ferramenta": "claude", "mensagem": SESSAO_AUTO_MENSAGEM })),
+                );
+            }
+            Err(erro) => {
+                state.status.ultimo_ok = Some(false);
+                if erro_novo {
+                    let _ = append_log_line(
+                        &paths,
+                        "error",
+                        "Falha ao reabrir a sessao do Claude.",
+                        Some(json!({ "ferramenta": "claude", "error": erro })),
+                    );
+                }
+                state.status.ultimo_erro = Some(erro);
+            }
+        }
+    });
+}
+
+/// Executa `claude -p "<mensagem>"` e devolve `Ok(())` se o CLI saiu com sucesso.
+///
+/// Detalhes que importam:
+/// - roda no diretorio de config do app (neutro): evita carregar o `CLAUDE.md` de
+///   algum projeto e o prompt de confianca de pasta;
+/// - remove `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` do processo filho — com uma
+///   delas setada o CLI iria para a API paga, que e' outro pool e **nao** abre a
+///   janela da assinatura;
+/// - stdin fechado (o CLI nunca fica esperando digitacao) e stdout descartado;
+/// - timeout com kill, para nao deixar processo pendurado.
+fn run_claude_session_opener(
+    paths: &RuntimePaths,
+    config: &SessaoAutoConfig,
+) -> Result<(), String> {
+    let exe = resolve_claude_cli(config)?;
+    // Subpasta dedicada, e nao o proprio config_dir: o Claude Code grava um
+    // transcript por disparo em `~/.claude/projects/<cwd>/`, e a Dashboard Claude
+    // deste app agrupa por basename do `cwd`. Rodando aqui, esses disparos
+    // aparecem na aba Projetos como "sessao-auto" — identificavel — em vez de um
+    // "AiUsageTrayAgent" que ninguem liga ao recurso.
+    let workdir = paths.config_dir.join("sessao-auto");
+    let _ = fs::create_dir_all(&workdir);
+
+    let mut command = Command::new(&exe);
+    command
+        .arg("-p")
+        .arg(SESSAO_AUTO_MENSAGEM)
+        .current_dir(&workdir)
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    // Sem isso, cada disparo pisca um console preto na frente do usuario.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "nao foi possivel executar o Claude Code CLI ({}): {error}",
+            exe.display()
+        )
+    })?;
+
+    let deadline = Instant::now() + SESSAO_AUTO_TIMEOUT;
+    let aguardou = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(format!(
+                        "o Claude Code CLI nao respondeu em {}s.",
+                        SESSAO_AUTO_TIMEOUT.as_secs()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+            Err(error) => break Err(format!("falha ao aguardar o Claude Code CLI: {error}")),
+        }
+    };
+
+    // Sempre depois do processo terminar (com sucesso, erro ou morto no timeout):
+    // o transcript ja' foi gravado e nao queremos deixa-lo para tras.
+    cleanup_session_transcripts(&workdir);
+
+    let status = aguardou?;
+    if status.success() {
+        return Ok(());
+    }
+
+    // O stderr so' e' lido depois da saida: o processo ja' terminou, entao ler ate'
+    // o EOF nao bloqueia.
+    let detalhe = child
+        .stderr
+        .take()
+        .and_then(|mut pipe| {
+            let mut buffer = String::new();
+            std::io::Read::read_to_string(&mut pipe, &mut buffer)
+                .ok()
+                .map(|_| buffer)
+        })
+        .unwrap_or_default();
+    // Ultimos 300 caracteres (nao bytes: fatiar por byte pode cair no meio de um
+    // caractere multibyte e entrar em panico).
+    let detalhe: String = {
+        let cauda: Vec<char> = detalhe.trim().chars().rev().take(300).collect();
+        cauda.into_iter().rev().collect()
+    };
+    if detalhe.is_empty() {
+        Err(format!("o Claude Code CLI terminou com {status}."))
+    } else {
+        Err(format!(
+            "o Claude Code CLI terminou com {status}: {detalhe}"
+        ))
+    }
+}
+
+/// Apaga o transcript que o Claude Code grava a cada disparo.
+///
+/// O CLI persiste uma sessao por execucao em
+/// `~/.claude/projects/<cwd-codificado>/<uuid>.jsonl`. Esses "Oi" nao sao conversa
+/// de verdade: sujariam o historico do CLI (`claude --resume`) e a Dashboard Claude
+/// deste app, que le exatamente esses arquivos.
+///
+/// A identificacao e' por **conteudo**, nao pelo nome da pasta: o Claude Code
+/// codifica o caminho do `cwd` no nome do diretorio, e replicar essa regra aqui
+/// quebraria silenciosamente se ela mudasse (ou com acentos no nome de usuario).
+/// Em vez disso, procura o diretorio cujos transcripts declaram o nosso `workdir`
+/// — que so' este recurso usa. Se nada casar, nao apaga nada.
+fn cleanup_session_transcripts(workdir: &Path) {
+    let Some(projects) = dirs::home_dir().map(|home| home.join(".claude").join("projects")) else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(&projects) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if dir.is_dir() && transcripts_belong_to(&dir, workdir) {
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}
+
+/// `true` quando **todo** transcript da pasta foi gerado a partir de `workdir`.
+///
+/// Le' so' o inicio de cada arquivo (o `cwd` aparece logo nas primeiras linhas)
+/// para nao carregar transcripts grandes de outros projetos. Basta um transcript
+/// apontando para outro diretorio — ou nenhum transcript com `cwd` — para a pasta
+/// ser considerada de terceiros e ficar intacta.
+fn transcripts_belong_to(dir: &Path, workdir: &Path) -> bool {
+    let alvo = workdir.to_string_lossy();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+
+    let mut confirmados = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // O Claude Code guarda outras coisas junto dos transcripts (ex.: a pasta
+        // `memory/` do projeto). Sao artefatos dele para *este* diretorio, entao
+        // nao invalidam a pasta — quem decide e' o `cwd` dos `.jsonl`.
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(file) = File::open(&path) else {
+            return false;
+        };
+        let cwd = std::io::BufReader::new(file)
+            .lines()
+            .take(10)
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+            .find_map(|obj| obj.get("cwd").and_then(Value::as_str).map(str::to_string));
+        // Windows nao diferencia maiusculas em caminho; comparar exato daria
+        // falso negativo (e a limpeza nunca aconteceria).
+        match cwd {
+            Some(cwd) if cwd.eq_ignore_ascii_case(&alvo) => confirmados += 1,
+            _ => return false,
+        }
+    }
+    confirmados > 0
+}
+
+/// Descobre o executavel do Claude Code CLI.
+///
+/// O `caminho_cli` do config manda, quando preenchido. Sem ele, tenta os locais
+/// conhecidos de instalacao **antes** do PATH: o app costuma subir pelo autostart,
+/// cujo ambiente nem sempre traz o `PATH` completo do shell do usuario.
+fn resolve_claude_cli(config: &SessaoAutoConfig) -> Result<PathBuf, String> {
+    let manual = config.caminho_cli.trim();
+    if !manual.is_empty() {
+        let path = PathBuf::from(manual);
+        return if path.is_file() {
+            Ok(path)
+        } else {
+            Err(format!("caminho do Claude Code CLI nao encontrado: {manual}"))
+        };
+    }
+
+    for candidate in claude_cli_candidates() {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    if let Some(found) = claude_cli_from_path() {
+        return Ok(found);
+    }
+
+    Err(
+        "Claude Code CLI nao encontrado. Instale-o (npm i -g @anthropic-ai/claude-code), \
+         faca login com a sua assinatura e, se preciso, informe o caminho no config.json \
+         (providers.claude.sessaoAuto.caminhoCli)."
+            .to_string(),
+    )
+}
+
+/// Locais padrao de instalacao do CLI, por sistema.
+fn claude_cli_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let home = dirs::home_dir();
+
+    #[cfg(target_os = "windows")]
+    {
+        // Instalacao via npm global: `claude.cmd`. O `std::process::Command` sabe
+        // executar .cmd/.bat com escape correto desde o Rust 1.77.
+        if let Some(appdata) = env::var_os("APPDATA") {
+            candidates.push(PathBuf::from(&appdata).join("npm").join("claude.cmd"));
+        }
+        if let Some(home) = home.as_ref() {
+            candidates.push(home.join(".local").join("bin").join("claude.exe"));
+            candidates.push(home.join(".local").join("bin").join("claude.cmd"));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = home.as_ref() {
+            candidates.push(home.join(".local").join("bin").join("claude"));
+            candidates.push(home.join(".claude").join("local").join("claude"));
+        }
+        candidates.push(PathBuf::from("/usr/local/bin/claude"));
+        candidates.push(PathBuf::from("/usr/bin/claude"));
+    }
+
+    candidates
+}
+
+/// Ultimo recurso: pergunta ao sistema onde esta' o `claude` (`where`/`which`).
+fn claude_cli_from_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let mut locator = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "where", "claude"]);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut locator = {
+        let mut command = Command::new("sh");
+        command.args(["-c", "command -v claude"]);
+        command
+    };
+
+    let output = locator.stdin(Stdio::null()).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        // No Windows o `where` lista tambem o script sem extensao (que o
+        // CreateProcess nao executa); fica so' com o que da' para rodar.
+        .filter(|line| {
+            !cfg!(target_os = "windows")
+                || ["cmd", "exe", "bat"].iter().any(|extension| {
+                    line.to_ascii_lowercase().ends_with(&format!(".{extension}"))
+                })
+        })
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
 }
 
 /// Processa o resultado da coleta de um provedor: atualiza o snapshot (sempre) e,
