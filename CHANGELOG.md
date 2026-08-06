@@ -29,6 +29,12 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Adicionado
+- Claude: opção "Reabrir a sessão automaticamente" (aba Claude das Configurações) — quando a janela de sessão (5h) expira, o app envia um "Oi" sozinho para já iniciar a próxima, sem você precisar lembrar; vem desligada e usa o Claude Code CLI com o login da sua assinatura.
+- Claude: a reabertura automática apaga o próprio rastro — o "Oi" não fica no histórico de conversas do Claude Code nem aparece como projeto na Dashboard Claude.
+
+## [0.2.51] - 2026-07-13
+
 ### Alterado
 - Codex: a OpenAI suspendeu temporariamente o limite de sessão (5h), deixando apenas o semanal (7d) — enquanto durar, a janela "Sessão (5h)" fica sem dados e o acompanhamento segue pelo semanal.
 

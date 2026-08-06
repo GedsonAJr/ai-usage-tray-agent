@@ -19,6 +19,7 @@ O projeto foi feito com:
 - No Windows, exibe o uso direto na barra de tarefas
 - No Windows, oferece um **widget flutuante na área de trabalho** com os cards de uso
 - Permite pausar e retomar o envio pelo menu do tray
+- Opcionalmente, **reabre sozinho a sessão (5h) do Claude** quando ela expira
 
 ## Status atual
 
@@ -77,7 +78,11 @@ Exemplo:
       "mostraNaTaskbarWindows": true,
       "authMode": "manual",
       "organizationId": "org_exemplo",
-      "cookie": "sessionKey=..."
+      "cookie": "sessionKey=...",
+      "sessaoAuto": {
+        "habilitado": false,
+        "caminhoCli": ""
+      }
     },
     "ordem": ["claude", "codex"]
   },
@@ -290,7 +295,8 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
   `claude-auth.json` — com aviso para reconectar quando a sessão expira). Se a conta
   tiver mais de uma organização, o app pede para escolher qual usar (mostrando o uso
   atual de cada uma), pois a coleta é por organização. Os campos ficam esmaecidos
-  quando o provedor está desativado.
+  quando o provedor está desativado. Traz ainda a **Reabertura automática de sessão**
+  (`sessaoAuto`) — ver a seção abaixo.
 - **Barra de tarefas** (Windows): exibir cada provedor na barra
   (`providers.<ia>.mostraNaTaskbarWindows`), `lado`, `deslocamento`,
   `tamanhoFonte`, `corFonte` (com seletor de cor), `formatoReset` (tempo
@@ -337,6 +343,55 @@ O app usa o `tauri-plugin-autostart` (chave `HKCU\...\Run` no Windows) e vem
   (evita apontar para um caminho antigo após atualizar/reinstalar).
 - Se o usuário desligar pelas Configurações, permanece desligado nas próximas
   execuções.
+
+## Reabertura automática da sessão do Claude
+
+A cota da assinatura é contada em **janelas de 5h que só começam quando você manda
+a primeira mensagem** — enquanto não há janela aberta, a API devolve
+`five_hour.resets_at: null`. Quem quer aproveitar o dia inteiro precisa lembrar de
+abrir a janela na mão (um "Oi") toda vez que a anterior expira. Ligando esta opção,
+o app faz isso sozinho.
+
+Fica na aba **Claude** das **Configurações** (ou em
+`providers.claude.sessaoAuto.habilitado` no `config.json`) e **vem desligada** — o
+recurso age na sua conta e consome cota, então só roda com opt-in explícito.
+
+Como funciona:
+
+- A cada coleta, se o Claude responder que **não há janela ativa**, o app dispara
+  `claude -p "Oi"`. A mensagem é fixa; o objetivo é só carimbar o início da janela.
+- Só age sobre uma coleta **bem-sucedida** que diga isso explicitamente. Erro de
+  coleta ou sessão expirada **não** contam como "janela fechada" — do contrário o
+  app gastaria cota à toa, possivelmente em looping.
+- Há um intervalo mínimo de 3 min entre tentativas e um teto de 2 min por chamada
+  (passou disso, o processo é encerrado e a tentativa vira falha).
+- A chamada roda em segundo plano, sem segurar o ciclo de coleta — o tray, a barra
+  e o widget continuam atualizando normalmente.
+- Abaixo do interruptor, uma linha mostra o resultado da última tentativa (verde no
+  sucesso, âmbar na falha, com o motivo) — é onde aparece, por exemplo, que o CLI
+  não está instalado ou que o login dele expirou.
+
+Requisitos e detalhes:
+
+- Precisa do **Claude Code CLI** instalado e logado **com a sua assinatura**
+  (`npm i -g @anthropic-ai/claude-code`). O app procura o executável nos locais
+  padrão de instalação e, se não achar, no `PATH`; para instalações fora desses
+  caminhos, informe o caminho em `providers.claude.sessaoAuto.caminhoCli`.
+- Uma variável `ANTHROPIC_API_KEY` (ou `ANTHROPIC_AUTH_TOKEN`) no ambiente é
+  **removida** do processo filho: com ela, o CLI iria para a API paga, que é outro
+  pool de cota e **não** abriria janela nenhuma.
+- Cada disparo consome muito pouco (poucos tokens de entrada e saída), mas não é
+  zero — ele aparece no uso que o próprio app exibe.
+- O Claude Code grava um transcript a cada execução. Como esses "Oi" não são
+  conversa de verdade, o app **apaga o transcript logo depois** — eles não poluem o
+  histórico do CLI (`claude --resume`) nem a **Dashboard Claude**. Em troca, o uso
+  desses disparos não é contabilizado no dashboard (que lê justamente esses
+  arquivos), embora continue aparecendo no **Uso atual**, que vem do servidor.
+- A limpeza é conservadora: o CLI roda num diretório dedicado
+  (`sessao-auto`, dentro da pasta de configuração), e só é removida a pasta de
+  transcripts cujos arquivos declaram esse diretório. Nenhum projeto seu é tocado.
+- Vale só para o Claude. O Codex não tem equivalente enquanto a OpenAI mantiver a
+  janela de 5h suspensa (não há sessão para reancorar).
 
 ## Barra de tarefas (Windows)
 
@@ -588,6 +643,9 @@ Claude:
 - O login pelo navegador abre a `claude.ai` numa janela do app e lê o cookie de
   sessão; login por SSO/Google pode não funcionar dentro dela — nesse caso use o
   login por e-mail/código
+- A **reabertura automática de sessão** depende do Claude Code CLI instalado e
+  logado com a assinatura; sem ele a opção fica sem efeito e a falha aparece na
+  aba Claude das Configurações
 
 Codex:
 

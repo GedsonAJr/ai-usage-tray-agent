@@ -9,12 +9,18 @@ interface CodexConfig {
   authJsonPath: string;
   authMode: string;
 }
+interface SessaoAutoConfig {
+  habilitado: boolean;
+  /** Só editável pelo config.json; a UI apenas repassa para não zerar o valor. */
+  caminhoCli: string;
+}
 interface ClaudeConfig {
   habilitado: boolean;
   mostraNaTaskbarWindows: boolean;
   organizationId: string;
   cookie: string;
   authMode: string;
+  sessaoAuto: SessaoAutoConfig;
 }
 interface BarraConfig {
   lado: string;
@@ -50,12 +56,20 @@ interface AppConfig {
   widget: WidgetConfig;
   servidor: ServerConfig;
 }
+/** Resultado da última reabertura automática de sessão (memória do backend). */
+interface SessaoAutoStatus {
+  ultimaTentativaEm?: string | null;
+  ultimoOk?: boolean | null;
+  ultimoErro?: string | null;
+  emExecucao?: boolean;
+}
 interface SettingsData {
   autostart: boolean;
   os: string;
   autostartLabel: string;
   appVersion: string;
   config: AppConfig;
+  sessaoAutoStatus?: SessaoAutoStatus;
 }
 interface SaveSettings {
   config: AppConfig;
@@ -96,6 +110,11 @@ function fillForm(data: SettingsData): void {
   setRadio("claudeAuthMode", claude.authMode === "navegador" ? "navegador" : "manual");
   syncClaudeAuthMode();
   $<HTMLInputElement>("set-claudeTaskbar").checked = claude.mostraNaTaskbarWindows !== false;
+  // Guarda o caminho do CLI (editável só pelo config.json) para devolvê-lo no save
+  // — o painel manda o bloco `providers` inteiro, então omitir zeraria o valor.
+  claudeSessaoAutoCliPath = claude.sessaoAuto?.caminhoCli ?? "";
+  $<HTMLInputElement>("set-claudeSessaoAuto").checked = !!claude.sessaoAuto?.habilitado;
+  syncSessaoAuto(data.sessaoAutoStatus);
 
   $<HTMLSelectElement>("set-barraLado").value = barra.lado === "esquerda" ? "esquerda" : "direita";
   $<HTMLInputElement>("set-barraDesloc").value = String(barra.deslocamento ?? 0);
@@ -155,6 +174,10 @@ function collect(): SaveSettings {
         organizationId: $<HTMLInputElement>("set-claudeOrg").value.trim(),
         cookie: $<HTMLInputElement>("set-claudeCookie").value.trim(),
         authMode: claudeAuthMode(),
+        sessaoAuto: {
+          habilitado: $<HTMLInputElement>("set-claudeSessaoAuto").checked,
+          caminhoCli: claudeSessaoAutoCliPath,
+        },
       },
     },
     barraTarefas: {
@@ -680,6 +703,47 @@ function syncProviderHints(): void {
   }
 
   syncProviderNotes();
+}
+
+/// Caminho do Claude Code CLI vindo do config.json. A UI não edita (é um escape
+/// para instalações fora do PATH), mas precisa devolvê-lo no save: o painel manda
+/// o bloco `providers` inteiro, então omitir o campo apagaria o valor do disco.
+let claudeSessaoAutoCliPath = "";
+
+/// Último status conhecido da reabertura automática. Só chega no `get_settings`
+/// (o backend guarda em memória), então é preservado entre os `sync` disparados
+/// pelo próprio toggle.
+let lastSessaoAutoStatus: SessaoAutoStatus | undefined;
+
+/// Mostra o resultado da última tentativa abaixo do toggle — é onde o usuário
+/// descobre que o CLI não está instalado ou que o login dele expirou. Aparece
+/// mesmo com a opção desligada, para o "Testar agora" ter retorno.
+function syncSessaoAuto(status?: SessaoAutoStatus): void {
+  if (status !== undefined) lastSessaoAutoStatus = status;
+
+  const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
+  const st = lastSessaoAutoStatus;
+  if (!st?.ultimaTentativaEm) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.classList.remove("ok", "warn");
+  if (st.emExecucao) {
+    el.textContent = "Enviando o “Oi”… (o CLI leva alguns segundos)";
+    return;
+  }
+  const quando = new Date(st.ultimaTentativaEm).toLocaleString();
+  if (st.ultimoOk) {
+    el.classList.add("ok");
+    el.textContent = `Última reabertura em ${quando}`;
+  } else {
+    el.classList.add("warn");
+    // O motivo pode faltar (falha sem mensagem do CLI); nesse caso não deixa um
+    // traço solto no fim.
+    el.textContent = `Falha ao reabrir em ${quando}${st.ultimoErro ? ` - ${st.ultimoErro}` : ""}`;
+  }
 }
 
 /// Aviso por provedor (abas Envio, Barra de tarefas e Widget): se o provedor está
