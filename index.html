@@ -367,12 +367,43 @@
                     <div class="provider-head">
                       <div class="provider-title">
                         <div class="provider-name">Reabrir a sessão automaticamente</div>
-                        <div class="provider-sub">Quando a janela de 5h expira, envia um “Oi” para abrir a próxima. Precisa do CLI instalado e logado.</div>
+                        <div class="provider-sub">Envia um “Oi” para abrir a janela de 5h sozinho. Precisa do CLI instalado e logado.</div>
                       </div>
                       <label class="switch" title="Reabrir a sessão automaticamente">
                         <input type="checkbox" id="set-claudeSessaoAuto">
                         <span class="switch-track"></span>
                       </label>
+                    </div>
+                    <div class="provider-body" id="set-claudeSessaoAutoBody">
+                      <div class="field">
+                        <label id="set-claudeSessaoAutoModoLabel">Quando reabrir</label>
+                        <div class="segmented" id="set-claudeSessaoAutoModo" role="radiogroup" aria-labelledby="set-claudeSessaoAutoModoLabel">
+                          <label class="seg-option">
+                            <input type="radio" name="claudeSessaoAutoModo" value="automatico">
+                            <span class="seg-btn">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.9"/><path d="M21 3v5h-5"/></svg>
+                              <span>Assim que expira</span>
+                            </span>
+                          </label>
+                          <label class="seg-option">
+                            <input type="radio" name="claudeSessaoAutoModo" value="agendado">
+                            <span class="seg-btn">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+                              <span>Em horários fixos</span>
+                            </span>
+                          </label>
+                        </div>
+                        <div class="desc" id="set-claudeSessaoAutoModoDesc"></div>
+                      </div>
+                      <div class="field" id="set-claudeSessaoAutoHorariosField" hidden>
+                        <label for="set-claudeSessaoAutoHora">Horários <span class="req">(hora local, todos os dias)</span></label>
+                        <div class="inline">
+                          <input type="time" id="set-claudeSessaoAutoHora" step="60">
+                          <button type="button" class="btn" id="set-claudeSessaoAutoAdd">Adicionar</button>
+                        </div>
+                        <div class="horarios" id="set-claudeSessaoAutoLista"></div>
+                        <div class="field-warn" id="set-claudeSessaoAutoWarn" hidden>Adicione ao menos um horário: sem horários, nada é reaberto.</div>
+                      </div>
                     </div>
                   </div>
                   <div class="field">

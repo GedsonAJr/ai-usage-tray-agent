@@ -268,7 +268,7 @@ svg text { fill: #9a968d; font-size: 11px; }
 .field .desc { color: #807c74; font-size: 12.5px; margin-top: 5px; }
 .req { color: #d97757; font-weight: 600; font-size: 12px; }
 .field-warn { margin-top: 7px; padding: 7px 10px; border-radius: 8px; font-size: 12.5px; background: #2c211d; border: 1px solid #5a3a30; color: #e0a890; }
-input[type=text], input[type=number], input[type=password], select {
+input[type=text], input[type=number], input[type=password], input[type=time], select {
   width: 100%; background: #1c1b18; border: 1px solid #3a3833; border-radius: 9px;
   color: #e8e6e1; font: inherit; font-size: 14px; padding: 9px 11px; }
 input:focus, select:focus { outline: none; border-color: #d97757; }
@@ -311,6 +311,9 @@ select {
 .provider-body { padding: 0 15px 14px; display: flex; flex-direction: column; gap: 14px; }
 .provider-body > .field { margin-bottom: 0; }
 .provider-body.is-off { opacity: .45; }
+/* O `display: flex` acima venceria o `[hidden]` do navegador (regra de autor >
+   folha padrão), e o corpo escondido pela UI continuaria aparecendo. */
+.provider-body[hidden] { display: none; }
 .provider-body input:disabled, .provider-body button:disabled { cursor: not-allowed; }
 /* Status do login pelo navegador de um provedor (verde conectado; âmbar reconectar).
    Codex usa `.codex-auth-status`; Claude usa `.auth-status` (mesmos valores). */
@@ -326,6 +329,17 @@ select {
 .stab-codex > .provider-body,
 .stab-claude > .provider-body,
 .stab-servidor > .provider-body { padding: 0; }
+/* Editor de horários da reabertura automática (aba Claude): campo de hora + um
+   chip removível por horário salvo. O campo não estica na .inline (a hora ocupa
+   pouco espaço e o botão "Adicionar" fica ao lado). */
+#set-claudeSessaoAutoHora { flex: none; width: auto; min-width: 130px; }
+.horarios { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.horarios:empty { display: none; }
+.horario { display: inline-flex; align-items: center; gap: 7px; padding: 5px 6px 5px 11px; border: 1px solid #3a3833;
+  border-radius: 999px; background: #1c1b18; font-size: 13px; color: #e8e6e1; font-variant-numeric: tabular-nums; }
+.horario button { flex: none; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: none;
+  border-radius: 50%; background: #2e2d29; color: #b8b3aa; font: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.horario button:hover { background: #5a3a30; color: #e0a890; }
 /* Texto do toggle de provedor com nome + nota opcional (ex.: aba Envio). */
 .prov-toggle-text { margin-right: auto; display: flex; flex-direction: column; gap: 2px; }
 .prov-toggle-text .prov-toggle-name { margin-right: 0; }
