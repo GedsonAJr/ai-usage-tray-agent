@@ -11,6 +11,10 @@ interface CodexConfig {
 }
 interface SessaoAutoConfig {
   habilitado: boolean;
+  /** `"automatico"` (assim que a janela expira) ou `"agendado"` (só nos horários). */
+  modo: string;
+  /** Horários do modo agendado, em `"HH:MM"` de hora local, válidos todos os dias. */
+  horarios: string[];
   /** Só editável pelo config.json; a UI apenas repassa para não zerar o valor. */
   caminhoCli: string;
 }
@@ -114,6 +118,9 @@ function fillForm(data: SettingsData): void {
   // — o painel manda o bloco `providers` inteiro, então omitir zeraria o valor.
   claudeSessaoAutoCliPath = claude.sessaoAuto?.caminhoCli ?? "";
   $<HTMLInputElement>("set-claudeSessaoAuto").checked = !!claude.sessaoAuto?.habilitado;
+  setRadio("claudeSessaoAutoModo", claude.sessaoAuto?.modo === "agendado" ? "agendado" : "automatico");
+  claudeSessaoAutoHorarios = [...(claude.sessaoAuto?.horarios ?? [])];
+  renderSessaoAutoHorarios();
   syncSessaoAuto(data.sessaoAutoStatus);
 
   $<HTMLSelectElement>("set-barraLado").value = barra.lado === "esquerda" ? "esquerda" : "direita";
@@ -176,6 +183,8 @@ function collect(): SaveSettings {
         authMode: claudeAuthMode(),
         sessaoAuto: {
           habilitado: $<HTMLInputElement>("set-claudeSessaoAuto").checked,
+          modo: sessaoAutoModo(),
+          horarios: claudeSessaoAutoHorarios,
           caminhoCli: claudeSessaoAutoCliPath,
         },
       },
@@ -715,11 +724,100 @@ let claudeSessaoAutoCliPath = "";
 /// pelo próprio toggle.
 let lastSessaoAutoStatus: SessaoAutoStatus | undefined;
 
+/// Horários do modo agendado ("HH:MM", ordenados). Fonte da verdade da lista
+/// enquanto o painel está aberto: os chips e o save leem daqui, porque não há um
+/// campo de formulário que caiba uma lista.
+let claudeSessaoAutoHorarios: string[] = [];
+
+const sessaoAutoModo = (): "automatico" | "agendado" =>
+  radioValue("claudeSessaoAutoModo") === "agendado" ? "agendado" : "automatico";
+
+/// Minuto do dia de um "HH:MM" já normalizado (usado só para achar o próximo).
+const horarioEmMinutos = (horario: string): number => {
+  const [hora, minuto] = horario.split(":");
+  return Number(hora) * 60 + Number(minuto);
+};
+
+/// "HH:MM" a partir do valor do `input[type=time]`, que pode vir vazio ou com
+/// segundos. O backend revalida (e descarta o que não presta); aqui é só para o
+/// chip não nascer torto.
+function normHorario(valor: string): string | null {
+  const partes = /^(\d{1,2}):([0-5]\d)/.exec(valor.trim());
+  if (!partes) return null;
+  const hora = Number(partes[1]);
+  if (hora > 23) return null;
+  return `${String(hora).padStart(2, "0")}:${partes[2]}`;
+}
+
+/// Desenha um chip por horário salvo, cada um com o botão de remover. Recriado
+/// inteiro a cada mudança: a lista é curta e assim não sobra listener velho.
+function renderSessaoAutoHorarios(): void {
+  const lista = $("set-claudeSessaoAutoLista");
+  lista.textContent = "";
+  claudeSessaoAutoHorarios.forEach((horario) => {
+    const chip = document.createElement("span");
+    chip.className = "horario";
+    chip.append(horario);
+    const remover = document.createElement("button");
+    remover.type = "button";
+    remover.textContent = "✕";
+    remover.title = `Remover ${horario}`;
+    remover.setAttribute("aria-label", `Remover ${horario}`);
+    remover.addEventListener("click", () => {
+      claudeSessaoAutoHorarios = claudeSessaoAutoHorarios.filter((h) => h !== horario);
+      renderSessaoAutoHorarios();
+      syncSessaoAuto();
+      scheduleAutoSave();
+    });
+    chip.append(remover);
+    lista.append(chip);
+  });
+}
+
+/// Adiciona o horário do campo à lista (ordenada, sem repetir) e salva. Ordenar
+/// "HH:MM" como texto já dá a ordem cronológica (as horas são zero-padded).
+function addSessaoAutoHorario(): void {
+  const input = $<HTMLInputElement>("set-claudeSessaoAutoHora");
+  const horario = normHorario(input.value);
+  if (!horario) return;
+  input.value = "";
+  if (claudeSessaoAutoHorarios.includes(horario)) return;
+  claudeSessaoAutoHorarios = [...claudeSessaoAutoHorarios, horario].sort();
+  renderSessaoAutoHorarios();
+  syncSessaoAuto();
+  scheduleAutoSave();
+}
+
+/// Explica o modo escolhido. No agendado, mostra qual é o próximo horário — é o
+/// jeito mais rápido de o usuário confirmar que a lista faz o que ele espera.
+function sessaoAutoModoDesc(): string {
+  if (sessaoAutoModo() !== "agendado") {
+    return "Assim que a janela de 5h expira, o app abre a próxima sozinho.";
+  }
+  if (claudeSessaoAutoHorarios.length === 0) return "A sessão só é aberta nos horários que você escolher.";
+  const agora = new Date();
+  const minutosAgora = agora.getHours() * 60 + agora.getMinutes();
+  const proximo = claudeSessaoAutoHorarios.find((h) => horarioEmMinutos(h) > minutosAgora);
+  return proximo
+    ? `Próximo horário: hoje às ${proximo}.`
+    : `Próximo horário: amanhã às ${claudeSessaoAutoHorarios[0]}.`;
+}
+
 /// Mostra o resultado da última tentativa abaixo do toggle — é onde o usuário
-/// descobre que o CLI não está instalado ou que o login dele expirou. Aparece
-/// mesmo com a opção desligada, para o "Testar agora" ter retorno.
+/// descobre que o CLI não está instalado ou que o login dele expirou — e revela
+/// as opções de modo/horários só quando a reabertura está ligada.
 function syncSessaoAuto(status?: SessaoAutoStatus): void {
   if (status !== undefined) lastSessaoAutoStatus = status;
+
+  const ligado = $<HTMLInputElement>("set-claudeSessaoAuto").checked;
+  const agendado = sessaoAutoModo() === "agendado";
+  ($("set-claudeSessaoAutoBody") as HTMLElement).hidden = !ligado;
+  ($("set-claudeSessaoAutoHorariosField") as HTMLElement).hidden = !agendado;
+  // Agendado sem horário nenhum não reabre nada: avisa em vez de fingir que está
+  // funcionando.
+  ($("set-claudeSessaoAutoWarn") as HTMLElement).hidden =
+    !(ligado && agendado && claudeSessaoAutoHorarios.length === 0);
+  $("set-claudeSessaoAutoModoDesc").textContent = sessaoAutoModoDesc();
 
   const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
   const st = lastSessaoAutoStatus;
@@ -826,6 +924,18 @@ export function initSettings(): void {
     syncClaudeAuthMode();
     syncProviderHints();
   });
+  $("set-claudeSessaoAuto").addEventListener("change", () => syncSessaoAuto());
+  $("set-claudeSessaoAutoModo").addEventListener("change", () => syncSessaoAuto());
+  $("set-claudeSessaoAutoAdd").addEventListener("click", addSessaoAutoHorario);
+  // Enter no campo de hora adiciona, em vez de nada acontecer.
+  $("set-claudeSessaoAutoHora").addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key !== "Enter") return;
+    e.preventDefault();
+    addSessaoAutoHorario();
+  });
+  // Escolher uma hora no campo não muda o config (só entra na lista pelo
+  // "Adicionar"), então o "change" dele não deve chegar ao auto-save.
+  $("set-claudeSessaoAutoHora").addEventListener("change", (e) => e.stopPropagation());
   $("set-claudeLogin").addEventListener("click", () => void claudeLogin());
   $("set-claudeLoginCancel").addEventListener("click", () => void claudeLoginCancel());
   $("set-claudeLogout").addEventListener("click", () => void claudeLogout());

@@ -19,7 +19,8 @@ O projeto foi feito com:
 - No Windows, exibe o uso direto na barra de tarefas
 - No Windows, oferece um **widget flutuante na área de trabalho** com os cards de uso
 - Permite pausar e retomar o envio pelo menu do tray
-- Opcionalmente, **reabre sozinho a sessão (5h) do Claude** quando ela expira
+- Opcionalmente, **reabre sozinho a sessão (5h) do Claude** — quando ela expira ou
+  em horários fixos que você escolhe
 
 ## Status atual
 
@@ -81,6 +82,8 @@ Exemplo:
       "cookie": "sessionKey=...",
       "sessaoAuto": {
         "habilitado": false,
+        "modo": "automatico",
+        "horarios": [],
         "caminhoCli": ""
       }
     },
@@ -363,6 +366,19 @@ Como funciona:
 - Só age sobre uma coleta **bem-sucedida** que diga isso explicitamente. Erro de
   coleta ou sessão expirada **não** contam como "janela fechada" — do contrário o
   app gastaria cota à toa, possivelmente em looping.
+- Há **dois modos** (`providers.claude.sessaoAuto.modo`), escolhidos no seletor
+  *Quando reabrir*:
+  - **Assim que expira** (`"automatico"`, padrão): dispara na primeira coleta que
+    encontrar a janela fechada, a qualquer hora do dia ou da noite.
+  - **Em horários fixos** (`"agendado"`): dispara só nos horários de
+    `providers.claude.sessaoAuto.horarios` — uma lista de `"HH:MM"` em **hora
+    local**, válida todos os dias (ex.: `["09:00", "14:00", "19:00"]`). Útil para
+    concentrar as janelas no horário em que você realmente trabalha, em vez de
+    abrir uma às 3h da manhã. Sem nenhum horário na lista, nada é reaberto.
+- No modo agendado o disparo é **no horário**, não depois dele: se naquele momento
+  o app estava fechado, ou já havia uma janela de 5h em andamento, aquele horário é
+  perdido e o app espera o próximo. Como quem decide é o ciclo de coleta, o horário
+  vale com uma folga de um ciclo + 1 min (mínimo de 2 min) para não passar em branco.
 - Há um intervalo mínimo de 3 min entre tentativas e um teto de 2 min por chamada
   (passou disso, o processo é encerrado e a tentativa vira falha).
 - A chamada roda em segundo plano, sem segurar o ciclo de coleta — o tray, a barra
@@ -370,6 +386,11 @@ Como funciona:
 - Abaixo do interruptor, uma linha mostra o resultado da última tentativa (verde no
   sucesso, âmbar na falha, com o motivo) — é onde aparece, por exemplo, que o CLI
   não está instalado ou que o login dele expirou.
+- O motivo vem do próprio CLI: o app captura o que ele escreve (o `claude -p`
+  reporta a falha no **stdout**, com o stderr vazio), guarda os últimos ~300
+  caracteres e usa isso tanto na linha de status quanto na entrada de erro do log
+  (`logs/AAAA-MM-DD.log`, campo `meta.error`). Erros idênticos repetidos só vão ao
+  log quando a mensagem muda, para não encher o arquivo.
 
 Requisitos e detalhes:
 

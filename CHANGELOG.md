@@ -30,6 +30,14 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 ## [Não lançado]
 
 ### Adicionado
+- Claude: a reabertura automática da sessão agora tem dois modos — "Assim que expira" (o comportamento atual) e "Em horários fixos", em que você escolhe os horários do dia em que a sessão (5h) deve ser aberta.
+
+### Corrigido
+- Claude: quando a reabertura automática da sessão falha, o app passa a mostrar o motivo dado pelo Claude Code CLI (ex.: "Not logged in · Please run /login") na aba Claude e no log, em vez de apenas "terminou com exit code: 1".
+
+## [0.2.52] - 2026-08-06
+
+### Adicionado
 - Claude: opção "Reabrir a sessão automaticamente" (aba Claude das Configurações) — quando a janela de sessão (5h) expira, o app envia um "Oi" sozinho para já iniciar a próxima, sem você precisar lembrar; vem desligada e usa o Claude Code CLI com o login da sua assinatura.
 - Claude: a reabertura automática apaga o próprio rastro — o "Oi" não fica no histórico de conversas do Claude Code nem aparece como projeto na Dashboard Claude.
 

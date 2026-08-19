@@ -22,7 +22,7 @@ mod usage_dashboard;
 mod taskbar_widget;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, NaiveDate, Timelike, Utc};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -364,21 +364,51 @@ impl Default for ClaudeConfig {
 /// a janela na mao ("Oi") toda vez que a anterior expira. Com isto ligado, o app
 /// percebe que nao ha' janela e manda essa mensagem sozinho.
 ///
+/// Dois modos, ambos exigindo que a coleta diga que **nao ha' janela aberta**
+/// (mandar "Oi" com janela aberta nao reinicia a contagem, so' gasta cota):
+/// - `automatico`: dispara assim que a janela anterior expira;
+/// - `agendado`: dispara so' nos `horarios` escolhidos (hora local, todos os dias).
+///   E' "no horario", nao "depois dele": horario perdido (app fechado ou janela
+///   ainda aberta naquele momento) nao e' recuperado — espera-se o proximo.
+///
 /// O disparo usa o **Claude Code CLI** (`claude -p`), que autentica pelo OAuth da
 /// assinatura em `~/.claude` — ou seja, consome a mesma cota que o app mede. Uma
 /// chave `ANTHROPIC_API_KEY` no ambiente desviaria a chamada para a API paga (pool
 /// separado, que nao abre janela nenhuma), entao ela e' removida do processo filho.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct SessaoAutoConfig {
-    /// Desligado por padrao (o `false` derivado): a funcao age na conta do usuario
-    /// e consome cota, entao so' roda com opt-in explicito nas Configuracoes.
+    /// Desligado por padrao: a funcao age na conta do usuario e consome cota,
+    /// entao so' roda com opt-in explicito nas Configuracoes.
     habilitado: bool,
+    /// Quando disparar: `"automatico"` (padrao; assim que a janela anterior
+    /// expira) ou `"agendado"` (so' nos `horarios`). Desconhecido = "automatico".
+    modo: String,
+    /// Horarios do modo agendado, em `"HH:MM"` de **hora local**, validos todos os
+    /// dias. Normalizados (ordenados, sem duplicatas, invalidos descartados) em
+    /// `normalize_config`. Vazio no modo agendado = nunca dispara.
+    horarios: Vec<String>,
     /// Caminho do executavel do Claude Code CLI. Vazio = descobrir sozinho
     /// (ver `resolve_claude_cli`). Serve de escape para instalacoes fora do PATH
     /// do processo do app — comum quando ele sobe pelo autostart.
     caminho_cli: String,
 }
+
+impl Default for SessaoAutoConfig {
+    fn default() -> Self {
+        Self {
+            habilitado: false,
+            modo: SESSAO_AUTO_MODO_AUTOMATICO.to_string(),
+            horarios: Vec::new(),
+            caminho_cli: String::new(),
+        }
+    }
+}
+
+/// Modo padrao: reage ao fim da janela, sem horario fixo.
+const SESSAO_AUTO_MODO_AUTOMATICO: &str = "automatico";
+/// Modo em que a reabertura so' acontece nos horarios escolhidos pelo usuario.
+const SESSAO_AUTO_MODO_AGENDADO: &str = "agendado";
 
 /// Mensagem que abre a janela. Fixa: o objetivo e' so' carimbar o inicio da
 /// janela, nao obter uma resposta util — e quanto mais curta, menos cota consome.
@@ -507,6 +537,10 @@ struct SharedState {
 struct SessaoAutoState {
     /// Quando a ultima tentativa comecou. Base do cooldown.
     last_attempt: Option<Instant>,
+    /// Ultimo horario agendado que ja' disparou, como `(data local, minuto do dia)`.
+    /// Impede que a folga do horario (ver `sessao_auto_slot_devido`) renda duas
+    /// tentativas para o mesmo horario.
+    last_slot: Option<(NaiveDate, u32)>,
     /// Ha' uma chamada ao CLI em andamento (ela roda fora do ciclo de coleta).
     running: bool,
     status: SessaoAutoStatus,
@@ -1865,6 +1899,9 @@ const SESSAO_AUTO_TIMEOUT: Duration = Duration::from_secs(120);
 /// janela (`status == "ok"` e `reset_em == None`). Falha de coleta ou credencial
 /// expirada **nao** sao sinal de janela fechada — disparar ali gastaria cota a
 /// toa, possivelmente em looping.
+///
+/// No modo `agendado` isso ainda vale, e ha' a condicao extra do horario: ver
+/// `sessao_auto_slot_devido`.
 fn maybe_reopen_claude_session(
     paths: &RuntimePaths,
     shared: &Arc<SharedState>,
@@ -1886,6 +1923,18 @@ fn maybe_reopen_claude_session(
         }
     }
 
+    // Modo agendado: sem horario devido agora, nao faz nada — nem que a janela
+    // esteja fechada ha' horas (horario perdido nao e' recuperado).
+    let slot = if claude.sessao_auto.modo == SESSAO_AUTO_MODO_AGENDADO {
+        let agora = Local::now();
+        match sessao_auto_slot_devido(&claude.sessao_auto, config.intervalo_segundos, agora) {
+            Some(minuto) => Some((agora.date_naive(), minuto)),
+            None => return,
+        }
+    } else {
+        None
+    };
+
     // Marca a tentativa com o lock ainda tomado, para que dois ciclos nao disparem
     // o mesmo "Oi" em paralelo.
     {
@@ -1896,6 +1945,14 @@ fn maybe_reopen_claude_session(
                 .is_some_and(|at| at.elapsed() < SESSAO_AUTO_COOLDOWN)
         {
             return;
+        }
+        // Um disparo por horario agendado: a folga do horario e' maior que o
+        // cooldown, entao sem isto o mesmo horario poderia render duas tentativas.
+        if slot.is_some() {
+            if state.last_slot == slot {
+                return;
+            }
+            state.last_slot = slot;
         }
         state.last_attempt = Some(Instant::now());
         state.running = true;
@@ -1945,6 +2002,36 @@ fn maybe_reopen_claude_session(
     });
 }
 
+/// Qual horario agendado esta' "devido" agora (minuto do dia), se algum.
+///
+/// A comparacao nao pode exigir o segundo exato: quem decide e' o ciclo de coleta,
+/// que roda a cada `intervalo_segundos` (5s..3600s) e dificilmente cai no instante
+/// do horario. Entao vale uma folga logo **depois** do horario, do tamanho de um
+/// ciclo + 1 min (piso de 2 min, teto de 10 min) — o suficiente para o horario nao
+/// passar em branco, e curto o bastante para continuar sendo "no horario" e nao
+/// "recuperar horario perdido".
+///
+/// Se dois horarios caem na mesma folga, vence o mais recente. Um horario perto da
+/// meia-noite tem a folga truncada em 23:59:59 (nao vira o dia); irrelevante na
+/// pratica e evita a complicacao de comparar entre dias.
+fn sessao_auto_slot_devido(
+    config: &SessaoAutoConfig,
+    intervalo_segundos: u64,
+    agora: DateTime<Local>,
+) -> Option<u32> {
+    let folga = (intervalo_segundos + 60).clamp(120, 600);
+    let agora_segundos = u64::from(agora.num_seconds_from_midnight());
+    config
+        .horarios
+        .iter()
+        .filter_map(|horario| parse_horario(horario))
+        .filter(|minuto| {
+            let inicio = u64::from(*minuto) * 60;
+            agora_segundos >= inicio && agora_segundos - inicio < folga
+        })
+        .max()
+}
+
 /// Executa `claude -p "<mensagem>"` e devolve `Ok(())` se o CLI saiu com sucesso.
 ///
 /// Detalhes que importam:
@@ -1953,7 +2040,9 @@ fn maybe_reopen_claude_session(
 /// - remove `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` do processo filho — com uma
 ///   delas setada o CLI iria para a API paga, que e' outro pool e **nao** abre a
 ///   janela da assinatura;
-/// - stdin fechado (o CLI nunca fica esperando digitacao) e stdout descartado;
+/// - stdin fechado (o CLI nunca fica esperando digitacao); stdout e stderr sao
+///   capturados e, na falha, viram o detalhe do erro (ver `erro_do_cli`) — no
+///   sucesso o texto e' descartado;
 /// - timeout com kill, para nao deixar processo pendurado.
 fn run_claude_session_opener(
     paths: &RuntimePaths,
@@ -1976,7 +2065,7 @@ fn run_claude_session_opener(
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // Sem isso, cada disparo pisca um console preto na frente do usuario.
     #[cfg(target_os = "windows")]
@@ -1993,6 +2082,13 @@ fn run_claude_session_opener(
         )
     })?;
 
+    // Os dois pipes sao drenados em threads, e nao depois do `wait`: um pipe cheio
+    // bloqueia quem escreve, entao o filho ficaria travado ate' o timeout de 2 min
+    // esperando alguem ler. Nao e' teorico agora que o stdout esta' capturado — no
+    // sucesso ele carrega a resposta inteira do modelo.
+    let saida = drena_pipe(child.stdout.take());
+    let erros = drena_pipe(child.stderr.take());
+
     let deadline = Instant::now() + SESSAO_AUTO_TIMEOUT;
     let aguardou = loop {
         match child.try_wait() {
@@ -2002,49 +2098,79 @@ fn run_claude_session_opener(
                     let _ = child.kill();
                     let _ = child.wait();
                     break Err(format!(
-                        "o Claude Code CLI nao respondeu em {}s.",
+                        "o Claude Code CLI nao respondeu em {}s",
                         SESSAO_AUTO_TIMEOUT.as_secs()
                     ));
                 }
                 thread::sleep(Duration::from_millis(200));
             }
-            Err(error) => break Err(format!("falha ao aguardar o Claude Code CLI: {error}")),
+            Err(error) => break Err(format!("falha ao aguardar o Claude Code CLI ({error})")),
         }
     };
+
+    // Os pipes fecham quando o processo termina — inclusive morto no timeout —,
+    // entao as threads de drenagem sempre chegam ao EOF e o join nao pendura.
+    let saida = saida.join().unwrap_or_default();
+    let erros = erros.join().unwrap_or_default();
 
     // Sempre depois do processo terminar (com sucesso, erro ou morto no timeout):
     // o transcript ja' foi gravado e nao queremos deixa-lo para tras.
     cleanup_session_transcripts(&workdir);
 
-    let status = aguardou?;
+    // No timeout nao ha' status, mas o que o CLI escreveu antes de travar e' a
+    // melhor (as vezes a unica) pista do motivo.
+    let status = match aguardou {
+        Ok(status) => status,
+        Err(base) => return Err(erro_do_cli(&base, &saida, &erros)),
+    };
     if status.success() {
+        // Sucesso: a resposta do modelo nao interessa a ninguem, some com ela.
         return Ok(());
     }
+    Err(erro_do_cli(
+        &format!("o Claude Code CLI terminou com {status}"),
+        &saida,
+        &erros,
+    ))
+}
 
-    // O stderr so' e' lido depois da saida: o processo ja' terminou, entao ler ate'
-    // o EOF nao bloqueia.
-    let detalhe = child
-        .stderr
-        .take()
-        .and_then(|mut pipe| {
-            let mut buffer = String::new();
-            std::io::Read::read_to_string(&mut pipe, &mut buffer)
-                .ok()
-                .map(|_| buffer)
-        })
-        .unwrap_or_default();
+/// Le um pipe do processo filho ate' o EOF, numa thread, sem nunca falhar: o
+/// conteudo e' diagnostico, entao byte invalido virar `U+FFFD` e' melhor que
+/// perder a mensagem toda (o que `read_to_string` faria).
+fn drena_pipe<R: std::io::Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<String> {
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = std::io::Read::read_to_end(&mut pipe, &mut buffer);
+        }
+        String::from_utf8_lossy(&buffer).into_owned()
+    })
+}
+
+/// Monta a mensagem de falha juntando a causa observavel (`base`, sem o ponto
+/// final) com o que o CLI escreveu.
+///
+/// O `claude -p` reporta a falha no **stdout** — "Not logged in · Please run
+/// /login", limite de uso, etc. — e costuma deixar o stderr vazio; sem isto o
+/// usuario so' via "terminou com exit code: 1" e nao tinha como saber o porque.
+/// Os dois streams entram (stderr primeiro, onde aparecem os erros de runtime do
+/// Node).
+fn erro_do_cli(base: &str, stdout: &str, stderr: &str) -> String {
+    let detalhe = [stderr.trim(), stdout.trim()]
+        .into_iter()
+        .filter(|parte| !parte.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
     // Ultimos 300 caracteres (nao bytes: fatiar por byte pode cair no meio de um
     // caractere multibyte e entrar em panico).
     let detalhe: String = {
-        let cauda: Vec<char> = detalhe.trim().chars().rev().take(300).collect();
+        let cauda: Vec<char> = detalhe.chars().rev().take(300).collect();
         cauda.into_iter().rev().collect()
     };
     if detalhe.is_empty() {
-        Err(format!("o Claude Code CLI terminou com {status}."))
+        format!("{base}.")
     } else {
-        Err(format!(
-            "o Claude Code CLI terminou com {status}: {detalhe}"
-        ))
+        format!("{base}: {detalhe}")
     }
 }
 
@@ -3385,6 +3511,40 @@ fn normalize_config(config: &mut AppConfig) {
         config.servidor.porta = 8770;
     }
     normalize_provider_order(&mut config.providers.ordem);
+    normalize_sessao_auto(&mut config.providers.claude.sessao_auto);
+}
+
+/// Sanitiza a reabertura automatica: modo desconhecido volta para `automatico` e a
+/// lista de horarios fica canonica (so' `"HH:MM"` valido, sem duplicatas, em ordem
+/// cronologica). Assim o resto do codigo pode confiar na lista sem revalidar, e o
+/// painel sempre reabre mostrando o que esta' realmente valendo.
+fn normalize_sessao_auto(sessao_auto: &mut SessaoAutoConfig) {
+    if sessao_auto.modo != SESSAO_AUTO_MODO_AGENDADO {
+        sessao_auto.modo = SESSAO_AUTO_MODO_AUTOMATICO.to_string();
+    }
+    let mut minutos: Vec<u32> = sessao_auto
+        .horarios
+        .iter()
+        .filter_map(|horario| parse_horario(horario))
+        .collect();
+    minutos.sort_unstable();
+    minutos.dedup();
+    sessao_auto.horarios = minutos
+        .into_iter()
+        .map(|minuto| format!("{:02}:{:02}", minuto / 60, minuto % 60))
+        .collect();
+}
+
+/// Converte `"HH:MM"` (aceita `"H:MM"` e sobras de espaco) no minuto do dia.
+/// `None` para qualquer coisa fora disso — inclusive `"24:00"` e `"09:60"`.
+fn parse_horario(horario: &str) -> Option<u32> {
+    let (hora, minuto) = horario.trim().split_once(':')?;
+    let hora: u32 = hora.trim().parse().ok()?;
+    let minuto: u32 = minuto.trim().parse().ok()?;
+    if hora > 23 || minuto > 59 {
+        return None;
+    }
+    Some(hora * 60 + minuto)
 }
 
 /// Sanitiza a ordem dos provedores: mantém só chaves conhecidas (`PROVIDER_KEYS`),
@@ -3751,4 +3911,197 @@ fn open_path(path: &Path) -> Result<(), String> {
 
     #[allow(unreachable_code)]
     Err("Abertura de caminho nao suportada neste sistema.".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn agendado(horarios: &[&str]) -> SessaoAutoConfig {
+        SessaoAutoConfig {
+            habilitado: true,
+            modo: SESSAO_AUTO_MODO_AGENDADO.to_string(),
+            horarios: horarios.iter().map(|h| h.to_string()).collect(),
+            caminho_cli: String::new(),
+        }
+    }
+
+    fn local(hora: u32, minuto: u32, segundo: u32) -> DateTime<Local> {
+        Local
+            .with_ymd_and_hms(2026, 8, 19, hora, minuto, segundo)
+            .single()
+            .expect("horario local valido (dia sem salto de fuso)")
+    }
+
+    #[test]
+    fn parse_horario_aceita_hh_mm_e_recusa_o_resto() {
+        assert_eq!(parse_horario("09:00"), Some(540));
+        assert_eq!(parse_horario(" 9:05 "), Some(545));
+        assert_eq!(parse_horario("23:59"), Some(1439));
+        assert_eq!(parse_horario("24:00"), None);
+        assert_eq!(parse_horario("09:60"), None);
+        assert_eq!(parse_horario("0900"), None);
+        assert_eq!(parse_horario(""), None);
+    }
+
+    #[test]
+    fn normalize_sessao_auto_ordena_deduplica_e_descarta_invalidos() {
+        let mut config = agendado(&["19:00", "9:0", "09:00", "banana", "25:00"]);
+        normalize_sessao_auto(&mut config);
+        assert_eq!(config.horarios, vec!["09:00", "19:00"]);
+        assert_eq!(config.modo, SESSAO_AUTO_MODO_AGENDADO);
+
+        let mut desconhecido = agendado(&[]);
+        desconhecido.modo = "cron".to_string();
+        normalize_sessao_auto(&mut desconhecido);
+        assert_eq!(desconhecido.modo, SESSAO_AUTO_MODO_AUTOMATICO);
+    }
+
+    #[test]
+    fn erro_do_cli_usa_stdout_stderr_e_trunca() {
+        // O caso real: `claude -p` falha, escreve no stdout e deixa o stderr vazio.
+        assert_eq!(
+            erro_do_cli(
+                "o Claude Code CLI terminou com exit code: 1",
+                "Not logged in · Please run /login\n",
+                "",
+            ),
+            "o Claude Code CLI terminou com exit code: 1: Not logged in · Please run /login"
+        );
+        // Os dois streams com texto: stderr primeiro.
+        assert_eq!(
+            erro_do_cli("base", "do stdout", "do stderr"),
+            "base: do stderr | do stdout"
+        );
+        // Nada capturado: mantem a frase fechada, sem tracos soltos.
+        assert_eq!(erro_do_cli("base", "  ", ""), "base.");
+        // Truncagem pela cauda, contando caracteres (nao bytes).
+        let longo = "ç".repeat(400);
+        let erro = erro_do_cli("base", &longo, "");
+        assert_eq!(erro.chars().count(), "base: ".chars().count() + 300);
+        assert!(erro.ends_with('ç'));
+    }
+
+    /// Ponta a ponta com um CLI falso: o que o processo escreve no stdout tem de
+    /// chegar na mensagem de erro — antes o stdout era descartado e sobrava so'
+    /// "terminou com exit code: 1".
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn opener_leva_o_stdout_do_cli_falho_para_a_mensagem() {
+        let base = std::env::temp_dir().join("ai-usage-tray-agent-teste-opener");
+        fs::create_dir_all(&base).expect("criar a pasta do teste");
+        let falso = base.join("claude-falso.cmd");
+        fs::write(
+            &falso,
+            "@echo off\r\necho Not logged in - Please run /login\r\nexit /b 1\r\n",
+        )
+        .expect("gravar o CLI falso");
+
+        let paths = RuntimePaths {
+            config_dir: base.clone(),
+            config_file: base.join("config.json"),
+            logs_dir: base.join("logs"),
+        };
+        let config = SessaoAutoConfig {
+            habilitado: true,
+            caminho_cli: falso.to_string_lossy().into_owned(),
+            ..SessaoAutoConfig::default()
+        };
+
+        let erro = run_claude_session_opener(&paths, &config).expect_err("o CLI falso sai com 1");
+        assert!(erro.contains("Not logged in"), "erro sem o detalhe: {erro}");
+        assert!(erro.contains("exit code: 1"), "erro sem o status: {erro}");
+    }
+
+    /// O detalhe nao pode parar na UI: e' no log do app que o usuario (ou quem
+    /// ajuda ele) vai procurar depois. Roda o caminho real de ponta a ponta —
+    /// coleta "ok, sem janela" + CLI falso — e confere UI **e** arquivo de log.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn falha_da_reabertura_vai_para_a_ui_e_para_o_log_com_o_detalhe() {
+        let base = std::env::temp_dir().join("ai-usage-tray-agent-teste-log");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).expect("criar a pasta do teste");
+        let falso = base.join("claude-falso.cmd");
+        fs::write(
+            &falso,
+            "@echo off\r\necho Not logged in - Please run /login\r\nexit /b 1\r\n",
+        )
+        .expect("gravar o CLI falso");
+
+        let paths = RuntimePaths {
+            config_dir: base.clone(),
+            config_file: base.join("config.json"),
+            logs_dir: base.join("logs"),
+        };
+        let mut config = AppConfig::default();
+        config.providers.claude.sessao_auto = SessaoAutoConfig {
+            habilitado: true,
+            caminho_cli: falso.to_string_lossy().into_owned(),
+            ..SessaoAutoConfig::default()
+        };
+        let shared = Arc::new(SharedState {
+            snapshot: Mutex::new(RuntimeSnapshot::default()),
+            cycle_lock: Mutex::new(()),
+            stop: AtomicBool::new(false),
+            force_pending: AtomicBool::new(false),
+            pending_update: Mutex::new(None),
+            sessao_auto: Mutex::new(SessaoAutoState::default()),
+        });
+        // O gatilho do recurso: coleta bem-sucedida sem janela de sessao.
+        lock_snapshot(&shared).claude_metric = Some(UsageMetric {
+            usuario: "teste".to_string(),
+            ferramenta: "claude".to_string(),
+            uso_percentual: Some(0.0),
+            restante_percentual: Some(100.0),
+            status: "ok".to_string(),
+            coletado_em: Utc::now().to_rfc3339(),
+            reset_em: None,
+            erro: None,
+            uso_percentual_7d: None,
+            restante_percentual_7d: None,
+            reset_em_7d: None,
+        });
+
+        maybe_reopen_claude_session(&paths, &shared, &config);
+
+        // A chamada ao CLI roda fora do ciclo, em thread propria; espera ela acabar.
+        let limite = Instant::now() + Duration::from_secs(30);
+        while lock_sessao_auto(&shared).status.em_execucao && Instant::now() < limite {
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        let status = lock_sessao_auto(&shared).status.clone();
+        assert_eq!(status.ultimo_ok, Some(false), "a tentativa devia falhar");
+        let erro_ui = status.ultimo_erro.unwrap_or_default();
+        assert!(erro_ui.contains("Not logged in"), "UI sem o detalhe: {erro_ui}");
+
+        let log = paths
+            .logs_dir
+            .join(format!("{}.log", Utc::now().format("%Y-%m-%d")));
+        let conteudo = fs::read_to_string(&log).expect("o log do dia foi criado");
+        assert!(
+            conteudo.contains("Falha ao reabrir a sessao do Claude."),
+            "log sem a mensagem: {conteudo}"
+        );
+        assert!(conteudo.contains("Not logged in"), "log sem o detalhe: {conteudo}");
+    }
+
+    #[test]
+    fn slot_devido_vale_no_horario_e_na_folga_do_ciclo() {
+        let config = agendado(&["09:00", "14:00"]);
+        // No horario e dentro da folga (piso de 2 min com o intervalo padrao).
+        assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 0, 0)), Some(540));
+        assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 1, 59)), Some(540));
+        // Passou da folga: horario perdido nao e' recuperado.
+        assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 2, 1)), None);
+        assert_eq!(sessao_auto_slot_devido(&config, 10, local(13, 0, 0)), None);
+        // Antes do horario tambem nao dispara.
+        assert_eq!(sessao_auto_slot_devido(&config, 10, local(8, 59, 59)), None);
+        // Intervalo de coleta longo alarga a folga (um ciclo + 1 min).
+        assert_eq!(sessao_auto_slot_devido(&config, 300, local(9, 5, 0)), Some(540));
+        // Sem horarios, nunca dispara.
+        assert_eq!(sessao_auto_slot_devido(&agendado(&[]), 10, local(9, 0, 0)), None);
+    }
 }
