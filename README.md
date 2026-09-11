@@ -248,7 +248,10 @@ Replica o painel de uso do Claude Code lendo as mesmas fontes locais
 (`~/.claude/projects/**/*.jsonl` e `~/.claude/stats-cache.json`). Tem abas:
 **Visão Geral** (cards de resumo + heatmap de atividade), **Modelos** (gráfico de
 tokens por modelo), **Ferramentas** (ranking das ferramentas mais usadas) e
-**Projetos** (uso por projeto). Há um seletor de período **30d/7d** ou
+**Projetos** (uso por projeto). Nos rankings o rótulo ocupa **uma linha**, cortada
+no meio quando não cabe (começo + fim à mostra, como no Finder do macOS): o corte
+é feito pelo CSS a partir da largura disponível, então alargar a janela revela
+mais caracteres, e o nome completo fica no tooltip. Há um seletor de período **30d/7d** ou
 **personalizado** (intervalo de datas, limitado ao período com dados); o padrão é
 **30d**. As abas Ferramentas e Projetos dependem dos transcripts vivos (~30 dias),
 então só enxergam esse período. Os dados vêm do comando `get_stats` e são

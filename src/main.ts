@@ -7,6 +7,7 @@ import { initEnvio, loadEnvio } from "./envio";
 import { isTauri } from "./ipc";
 import { initSettings } from "./settings";
 import { initSobre } from "./sobre";
+import { initTabSliders } from "./tabs";
 import { checkUpdateStatus } from "./update-status";
 import { initUsage, loadUsage } from "./usage";
 
@@ -47,6 +48,7 @@ window.addEventListener("focus", () => {
   else if (document.getElementById("view-codex-dashboard")?.classList.contains("on")) void loadCodexDashboard();
 });
 
+initTabSliders();
 initUsage();
 
 // Ao abrir a janela, verifica atualização (uma vez) — se houver, o item "Sobre"

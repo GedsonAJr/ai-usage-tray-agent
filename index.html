@@ -273,7 +273,7 @@
                       </label>
                     </div>
                   </div>
-                  <div id="set-codexFileAuth">
+                  <div id="set-codexFileAuth" class="anima-altura">
                     <div class="field">
                       <label for="set-codexAuth">Caminho do auth.json <span class="req">(obrigatório)</span></label>
                       <div class="inline">
@@ -282,7 +282,7 @@
                       </div>
                     </div>
                   </div>
-                  <div id="set-codexBrowserAuth" hidden>
+                  <div id="set-codexBrowserAuth" class="anima-altura" hidden>
                     <div class="field">
                       <div class="codex-auth-status" id="set-codexAuthStatus">Conecte sua conta para iniciar a coleta.</div>
                       <div class="inline">
@@ -330,7 +330,7 @@
                       </label>
                     </div>
                   </div>
-                  <div id="set-claudeManualAuth">
+                  <div id="set-claudeManualAuth" class="anima-altura">
                     <div class="field">
                       <label for="set-claudeOrg">Organization ID <span class="req">(obrigatório)</span></label>
                       <input type="text" id="set-claudeOrg" placeholder="org_...">
@@ -343,9 +343,9 @@
                       </div>
                       <div class="desc">Ex.: <code>sessionKey=...</code>. Se o cookie expirar, atualize aqui.</div>
                     </div>
-                    <div id="set-claudeWarn" class="field-warn" hidden>Preencha o Organization ID e o Cookie de sessão para iniciar a coleta.</div>
+                    <div id="set-claudeWarn" class="field-warn anima-altura" hidden>Preencha o Organization ID e o Cookie de sessão para iniciar a coleta.</div>
                   </div>
-                  <div id="set-claudeBrowserAuth" hidden>
+                  <div id="set-claudeBrowserAuth" class="anima-altura" hidden>
                     <div class="field">
                       <div class="auth-status" id="set-claudeAuthStatus">Conecte sua conta para iniciar a coleta.</div>
                       <div class="inline">
@@ -354,7 +354,7 @@
                         <button type="button" class="btn" id="set-claudeLogout" hidden>Desconectar</button>
                       </div>
                     </div>
-                    <div class="field" id="set-claudeOrgPicker" hidden>
+                    <div class="field anima-altura" id="set-claudeOrgPicker" hidden>
                       <label for="set-claudeOrgSelect">Escolha a organização</label>
                       <div class="inline">
                         <select id="set-claudeOrgSelect"></select>
@@ -374,7 +374,7 @@
                         <span class="switch-track"></span>
                       </label>
                     </div>
-                    <div class="provider-body" id="set-claudeSessaoAutoBody">
+                    <div class="provider-body anima-altura" id="set-claudeSessaoAutoBody">
                       <div class="field">
                         <label id="set-claudeSessaoAutoModoLabel">Quando reabrir</label>
                         <div class="segmented" id="set-claudeSessaoAutoModo" role="radiogroup" aria-labelledby="set-claudeSessaoAutoModoLabel">
@@ -395,16 +395,16 @@
                         </div>
                         <div class="desc" id="set-claudeSessaoAutoModoDesc"></div>
                       </div>
-                      <div class="field" id="set-claudeSessaoAutoHorariosField" hidden>
+                      <div class="field anima-altura" id="set-claudeSessaoAutoHorariosField" hidden>
                         <label for="set-claudeSessaoAutoHora">Horários <span class="req">(hora local, todos os dias)</span></label>
                         <div class="inline">
                           <input type="time" id="set-claudeSessaoAutoHora" step="60">
                           <button type="button" class="btn" id="set-claudeSessaoAutoAdd">Adicionar</button>
                         </div>
                         <div class="horarios" id="set-claudeSessaoAutoLista"></div>
-                        <div class="field-warn" id="set-claudeSessaoAutoWarn" hidden>Adicione ao menos um horário: sem horários, nada é reaberto.</div>
+                        <div class="field-warn anima-altura" id="set-claudeSessaoAutoWarn" hidden>Adicione ao menos um horário: sem horários, nada é reaberto.</div>
                       </div>
-                      <div id="set-claudeSessaoAutoStatus" class="auth-status" hidden></div>
+                      <div id="set-claudeSessaoAutoStatus" class="auth-status anima-altura" hidden></div>
                     </div>
                   </div>
                 </div>
@@ -693,7 +693,7 @@
                       <input type="password" id="set-srvPin" placeholder="defina um PIN" autocomplete="new-password">
                       <button type="button" class="btn btn-show" id="set-srvPinToggle">Mostrar</button>
                     </div>
-                    <div id="set-srvPinWarn" class="field-warn" hidden>Defina um PIN para o servidor poder iniciar.</div>
+                    <div id="set-srvPinWarn" class="field-warn anima-altura" hidden>Defina um PIN para o servidor poder iniciar.</div>
                   </div>
                 </div>
               </div>

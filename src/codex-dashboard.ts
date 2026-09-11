@@ -3,6 +3,7 @@
 // dados vêm de uma chamada de rede (analytics do backend do ChatGPT) pelo comando
 // IPC `get_codex_stats`, e a unidade é PERCENTUAL de uso diário (não tokens).
 // A tela carrega ao abrir e refaz a chamada ao trocar o período (30d/7d).
+import { animaTrocaDeAba } from "./anima";
 import { invoke } from "./ipc";
 import { escapeHtml } from "./usage-format";
 import { CUSTOM_LABEL, dkey, dayLabel, fmtShort, normalizeRange, placeFixed, setOn } from "./chart-utils";
@@ -324,14 +325,27 @@ export async function loadCodexDashboard(opts?: { skeleton?: boolean }): Promise
 
 let initialized = false;
 
+/// Troca a aba animando a altura do painel e o fade do conteúdo que entra.
+/// Diferente das outras telas, aqui as abas não trocam de painel: o gráfico e a
+/// legenda são redesenhados dentro dos mesmos elementos, então os três blocos
+/// afetados recebem o fade de entrada.
+function trocaAba(nova: string, alvo: EventTarget | null): void {
+  const painel = document.querySelector("#view-codex-dashboard > .panel") as HTMLElement;
+  animaTrocaDeAba(painel, () => {
+    tab = nova;
+    setOn(".codex-tabs", alvo);
+    render();
+  }, el("codex-view-geral"), el("codex-chart"), el("codex-legend"));
+}
+
 /// Liga os eventos da view (uma vez) e dispara o primeiro load.
 export function initCodexDashboard(): void {
   if (initialized) { void loadCodexDashboard(); return; }
   initialized = true;
 
-  el("codex-tab-geral").onclick = (e) => { tab = "geral"; setOn(".codex-tabs", e.target); render(); };
-  el("codex-tab-surfaces").onclick = (e) => { tab = "surfaces"; setOn(".codex-tabs", e.target); render(); };
-  el("codex-tab-modelos").onclick = (e) => { tab = "modelos"; setOn(".codex-tabs", e.target); render(); };
+  el("codex-tab-geral").onclick = (e) => { trocaAba("geral", e.target); };
+  el("codex-tab-surfaces").onclick = (e) => { trocaAba("surfaces", e.target); };
+  el("codex-tab-modelos").onclick = (e) => { trocaAba("modelos", e.target); };
   const customBtn = document.querySelector('.codex-ranges button[data-d="custom"]') as HTMLButtonElement;
 
   document.querySelectorAll(".codex-ranges button").forEach((b) =>

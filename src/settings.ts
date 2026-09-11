@@ -2,6 +2,7 @@
 // Lê/grava o config.json + autostart pelos comandos IPC `get_settings` e
 // `save_settings`. Antes era um formulário servido por HTTP no navegador.
 import { invoke } from "@tauri-apps/api/core";
+import { animaTrocaDeAba } from "./anima";
 
 interface CodexConfig {
   habilitado: boolean;
@@ -922,11 +923,20 @@ function syncProviderNotes(): void {
   setNotes(["barra-claude-note", "wdg-claude-note"], providerNote(claudeOn, claudeCfg));
 }
 
+/// Troca a aba levando o formulário da altura antiga até a nova e dando o fade de
+/// entrada no painel escolhido (ver anima.ts) — sem isso o painel salta de
+/// tamanho, já que cada aba tem uma quantidade diferente de campos.
 function activateTab(tab: string): void {
-  document.querySelectorAll(".settings-tabs button").forEach((b) =>
-    b.classList.toggle("on", (b as HTMLElement).dataset.stab === tab));
-  document.querySelectorAll(".stab").forEach((s) =>
-    s.classList.toggle("on", (s as HTMLElement).dataset.spanel === tab));
+  animaTrocaDeAba(
+    $("settings-form"),
+    () => {
+      document.querySelectorAll(".settings-tabs button").forEach((b) =>
+        b.classList.toggle("on", (b as HTMLElement).dataset.stab === tab));
+      document.querySelectorAll(".stab").forEach((s) =>
+        s.classList.toggle("on", (s as HTMLElement).dataset.spanel === tab));
+    },
+    document.querySelector<HTMLElement>('.stab[data-spanel="' + tab + '"]'),
+  );
 }
 
 let initialized = false;

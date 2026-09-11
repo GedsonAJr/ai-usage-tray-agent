@@ -31,8 +31,14 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ### Adicionado
 - Configurações: ao mudar qualquer opção, aparece um "Configuração salva" no canto oposto ao título da tela, confirmando que a alteração foi gravada — antes o salvamento era automático e silencioso, sem nenhum retorno visual.
+- A troca de telas e de abas agora é animada (o conteúdo aparece com um fade e o painel acompanha a altura da aba escolhida, em vez de saltar), e as abas ganharam realce ao passar o mouse, com o fundo da aba selecionada deslizando até a aba clicada.
+- Configurações: os blocos que aparecem e somem conforme as opções (modo de autenticação, reabertura automática da sessão, avisos) passaram a crescer e encolher animados, em vez de o formulário saltar de tamanho.
+- Configurações (aba Widget): o modo de exibição destaca o cartão sob o mouse e a troca de seleção acontece com transição de cor.
+- Quem usa o Windows com os efeitos de animação desligados continua vendo o app sem nenhuma animação.
 
 ### Alterado
+- Dashboard Claude (aba Ferramentas): nomes muito longos (as ferramentas MCP) não quebram mais o alinhamento da lista — agora cada nome ocupa uma linha só e é cortado no meio, preservando o começo e o fim; o nome completo fica no tooltip e alargar a janela revela mais caracteres.
+- Todas as telas: a área de conteúdo ficou mais larga (até 1280px), aproveitando melhor as janelas grandes.
 - Todas as telas: sobra menos espaço vazio no rodapé — antes a página podia ganhar barra de rolagem por causa da própria margem, mesmo com o conteúdo praticamente cabendo na janela.
 - Configurações (aba Claude): a mensagem da última reabertura automática da sessão passou para dentro do quadro "Reabrir a sessão automaticamente", em vez de ficar solta abaixo dele.
 

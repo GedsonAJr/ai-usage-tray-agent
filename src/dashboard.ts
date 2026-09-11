@@ -2,6 +2,7 @@
 // Os dados vêm do backend Rust pelo comando IPC `get_stats` (antes era um
 // fetch a um servidor HTTP local). A lógica de render é a mesma do painel
 // original (cards, heatmap, gráfico de modelos), só tipada em TypeScript.
+import { animaTrocaDeAba } from "./anima";
 import { invoke } from "./ipc";
 import { escapeHtml } from "./usage-format";
 import { CUSTOM_LABEL, dkey, dayLabel, fmtShort, normalizeRange, placeFixed, setOn } from "./chart-utils";
@@ -293,11 +294,22 @@ function setCustomOpen(open: boolean): void {
   el("range-custom").classList.toggle("hide", !open);
 }
 
+/// Parte o rótulo ao meio para o corte no meio do nome. Quem corta é o CSS (ver
+/// .rlabel): as duas metades encolhem juntas conforme a largura disponível, então
+/// sobra mais ou menos a mesma quantidade de texto dos dois lados — alargar a
+/// janela revela mais caracteres, sem re-renderizar. Cabendo inteiro, as metades
+/// ficam coladas e não há reticências.
+function labelParts(label: string): string {
+  const cut = Math.ceil(label.length / 2);
+  return '<span class="lhead">' + escapeHtml(label.slice(0, cut)) + '</span>' +
+    '<span class="ltail"><span>' + escapeHtml(label.slice(cut)) + "</span></span>";
+}
+
 // Uma linha do ranking horizontal (rótulo · barra proporcional · valor).
 function rankRow(label: string, val: number, max: number, i: number, valText: string): string {
   const pct = ((val / max) * 100).toFixed(1);
   const color = PALETTE[i % PALETTE.length];
-  return '<div class="rrow"><div class="rlabel" title="' + escapeHtml(label) + '">' + escapeHtml(label) +
+  return '<div class="rrow"><div class="rlabel" title="' + escapeHtml(label) + '">' + labelParts(label) +
     '</div><div class="rbar"><span style="width:' + pct + "%;background:" + color + '"></span></div>' +
     '<div class="rval">' + valText + "</div></div>";
 }
@@ -392,15 +404,29 @@ function updateApplyState(): void {
 
 let initialized = false;
 
+/// Painel que envolve as abas: é a altura dele que acompanha a aba escolhida.
+const painelDash = (): HTMLElement => document.querySelector("#view-dashboard > .panel") as HTMLElement;
+
+/// Troca a aba animando a altura do painel e o fade do conteúdo que entra. Nas
+/// abas de lista o painel é limitado pela altura da janela (.dash-scroll), por
+/// isso a altura de destino é medida em vez de `auto`.
+function trocaAba(nova: string, alvo: EventTarget | null): void {
+  animaTrocaDeAba(painelDash(), () => {
+    tab = nova;
+    setOn(".tabs", alvo);
+    render();
+  }, el("view-" + nova));
+}
+
 /// Liga os eventos da view do dashboard (uma vez) e dispara o primeiro load.
 export function initDashboard(): void {
   if (initialized) { void loadDashboard(); return; }
   initialized = true;
 
-  el("tab-geral").onclick = (e) => { tab = "geral"; setOn(".tabs", e.target); render(); };
-  el("tab-modelos").onclick = (e) => { tab = "modelos"; setOn(".tabs", e.target); render(); };
-  el("tab-ferramentas").onclick = (e) => { tab = "ferramentas"; setOn(".tabs", e.target); render(); };
-  el("tab-projetos").onclick = (e) => { tab = "projetos"; setOn(".tabs", e.target); render(); };
+  el("tab-geral").onclick = (e) => trocaAba("geral", e.target);
+  el("tab-modelos").onclick = (e) => trocaAba("modelos", e.target);
+  el("tab-ferramentas").onclick = (e) => trocaAba("ferramentas", e.target);
+  el("tab-projetos").onclick = (e) => trocaAba("projetos", e.target);
   const customBtn = document.querySelector('.ranges button[data-r="custom"]') as HTMLButtonElement;
 
   document.querySelectorAll(".ranges button").forEach((b) =>
