@@ -2,6 +2,7 @@
 // Lê/grava o config.json + autostart pelos comandos IPC `get_settings` e
 // `save_settings`. Antes era um formulário servido por HTTP no navegador.
 import { invoke } from "@tauri-apps/api/core";
+import { animaTrocaDeAba } from "./anima";
 
 interface CodexConfig {
   habilitado: boolean;
@@ -295,9 +296,11 @@ async function pickCodexAuthFile(): Promise<void> {
 function setMsg(text: string, kind?: "ok" | "err"): void {
   // Só exibimos erros no topo — coisas que o usuário talvez não perceba (ex.: falha
   // ao salvar). Confirmações de ações que ele mesmo disparou (conectar/desconectar)
-  // são redundantes e limpam a área em vez de exibir.
+  // são redundantes e limpam a área em vez de exibir. A exceção é o auto-save, que
+  // ninguém dispara conscientemente: ele avisa por setSaved().
   const node = document.getElementById("settings-msg");
   if (!node) return;
+  cancelMsgFade(node);
   if (kind === "err" && text) {
     node.textContent = text;
     node.className = "msg err";
@@ -305,6 +308,50 @@ function setMsg(text: string, kind?: "ok" | "err"): void {
     node.textContent = "";
     node.className = "msg";
   }
+}
+
+/// Quanto tempo o "Configuração salva" fica legível antes de começar a sumir, e a
+/// duração do esmaecimento (casada com a transição do .msg no styles.css).
+const MSG_HOLD_MS = 2500;
+const MSG_FADE_MS = 300;
+
+// Timers do aviso efêmero "Configuração salva": um esmaece, o outro limpa. Ficam
+// no módulo para que um aviso novo (ou um erro) cancele o sumiço do anterior.
+let msgFadeTimer: number | undefined;
+let msgClearTimer: number | undefined;
+
+/// Cancela o sumiço programado e tira o nó do estado esmaecido, para que a próxima
+/// mensagem apareça opaca e pelo tempo inteiro.
+function cancelMsgFade(node: HTMLElement): void {
+  if (msgFadeTimer !== undefined) {
+    clearTimeout(msgFadeTimer);
+    msgFadeTimer = undefined;
+  }
+  if (msgClearTimer !== undefined) {
+    clearTimeout(msgClearTimer);
+    msgClearTimer = undefined;
+  }
+  node.classList.remove("is-fading");
+}
+
+/// Confirma a gravação do config no lado oposto ao título ("Configurações"). O
+/// save é automático e silencioso: sem esse aviso o usuário não tem como saber que
+/// a alteração foi para o disco. Some sozinho para não virar ruído permanente.
+function setSaved(): void {
+  const node = document.getElementById("settings-msg");
+  if (!node) return;
+  cancelMsgFade(node);
+  node.textContent = "Configuração salva";
+  node.className = "msg ok";
+  msgFadeTimer = window.setTimeout(() => {
+    msgFadeTimer = undefined;
+    node.classList.add("is-fading");
+    msgClearTimer = window.setTimeout(() => {
+      msgClearTimer = undefined;
+      node.textContent = "";
+      node.className = "msg";
+    }, MSG_FADE_MS);
+  }, MSG_HOLD_MS);
 }
 
 // O bloco `envio` (Enviar ao Loki por provedor) NÃO faz parte do save_settings
@@ -330,6 +377,7 @@ async function loadEnvioToggles(): Promise<void> {
 async function setEnvioProvider(ferramenta: "codex" | "claude", enviar: boolean): Promise<void> {
   try {
     await invoke("set_envio_provider", { ferramenta, enviar });
+    setSaved();
   } catch (e) {
     setMsg("Falha ao salvar o envio do provedor: " + (e instanceof Error ? e.message : String(e)), "err");
   }
@@ -666,7 +714,7 @@ async function autoSave(): Promise<void> {
     // Só reflete a normalização (clamp de intervalo/fonte, validação de cor) se
     // não houve mudança nova e nada está sendo digitado.
     if (seq === saveSeq && !isEditingField()) fillForm(data);
-    setMsg("");
+    setSaved();
   } catch (e) {
     setMsg("Erro ao salvar: " + (e instanceof Error ? e.message : String(e)), "err");
   }
@@ -875,11 +923,20 @@ function syncProviderNotes(): void {
   setNotes(["barra-claude-note", "wdg-claude-note"], providerNote(claudeOn, claudeCfg));
 }
 
+/// Troca a aba levando o formulário da altura antiga até a nova e dando o fade de
+/// entrada no painel escolhido (ver anima.ts) — sem isso o painel salta de
+/// tamanho, já que cada aba tem uma quantidade diferente de campos.
 function activateTab(tab: string): void {
-  document.querySelectorAll(".settings-tabs button").forEach((b) =>
-    b.classList.toggle("on", (b as HTMLElement).dataset.stab === tab));
-  document.querySelectorAll(".stab").forEach((s) =>
-    s.classList.toggle("on", (s as HTMLElement).dataset.spanel === tab));
+  animaTrocaDeAba(
+    $("settings-form"),
+    () => {
+      document.querySelectorAll(".settings-tabs button").forEach((b) =>
+        b.classList.toggle("on", (b as HTMLElement).dataset.stab === tab));
+      document.querySelectorAll(".stab").forEach((s) =>
+        s.classList.toggle("on", (s as HTMLElement).dataset.spanel === tab));
+    },
+    document.querySelector<HTMLElement>('.stab[data-spanel="' + tab + '"]'),
+  );
 }
 
 let initialized = false;

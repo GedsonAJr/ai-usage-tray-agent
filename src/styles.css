@@ -61,9 +61,21 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 
 /* scrollbar-gutter: reserva o espaco da barra de rolagem mesmo sem scroll, para
    a largura do conteudo nao "pular" quando a barra aparece/some. */
-.content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 28px 28px 48px; }
-.view { display: none; max-width: 880px; margin: 0 auto; }
-.view.on { display: block; }
+/* A folga de baixo é menor que a de cima: 48px sobrando embaixo faziam a página
+   rolar por causa da própria margem, mesmo com o conteúdo praticamente cabendo. */
+.content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 28px 28px 20px; }
+/* Teto de largura do conteúdo, comum a todas as telas. Alto o bastante para que
+   alargar a janela revele os rótulos longos do ranking (o nome fica na coluna de
+   40% da .ranklist), sem deixar os textos das telas de formulário esticarem
+   demais em monitores largos. */
+.view { display: none; max-width: 1280px; margin: 0 auto; }
+/* Fade rápido ao trocar de tela. Só a entrada é animada: a tela anterior sai do
+   fluxo com display: none e animar a saída exigiria mantê-la na tela durante a
+   transição. O deslocamento de 2px dá a direção do movimento sem empurrar o
+   conteúdo de forma perceptível. A animação dispara quando a classe .on entra, e
+   activate() só a aplica na troca — reclicar o item já ativo não re-anima. */
+@keyframes view-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+.view.on { display: block; animation: view-in .2s ease-out; }
 
 h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap: 10px; margin: 0; }
 
@@ -74,8 +86,33 @@ h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap:
    as abas (cards/ranklist/gráfico). */
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 14px; border-bottom: 1px solid #34322d; margin-bottom: 16px; }
 .tabs, .ranges { display: flex; gap: 4px; }
-.tabs button, .ranges button { background: transparent; border: none; color: #9a968d; padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 14px; }
+/* A transição fica na regra base, então vale nos dois sentidos: ao passar o
+   mouse e na troca de seleção dos botões de período, que não têm pílula. */
+.tabs button, .ranges button { background: transparent; border: none; color: #9a968d; padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 14px;
+  transition: background .18s ease, color .18s ease; }
+/* Aba não selecionada sob o mouse: prévia discreta do estado selecionado. */
+.tabs button:hover, .ranges button:hover { background: #2e2d29; color: #e8e6e1; }
 .tabs button.on, .ranges button.on { background: #3a3833; color: #fff; }
+/* A selecionada também responde ao mouse, um tom acima — sem isso ela parece
+   "morta" justamente onde o clique não teria efeito. */
+.tabs button.on:hover, .ranges button.on:hover { background: #46433d; }
+
+/* Pílula deslizante do estado selecionado (ver tabs.ts): um único fundo por
+   barra, que anda até a aba clicada em vez de aparecer/sumir. Ela fica ATRÁS dos
+   botões, que por isso ganham empilhamento próprio. Enquanto o JS não mediu a
+   aba ativa (barra ainda escondida), nada disso vale e o fundo continua sendo o
+   do próprio botão — a tela nunca fica sem indicar a seleção. */
+.tabs { position: relative; }
+.tabs button { position: relative; z-index: 1; }
+.tabs .tab-pill { position: absolute; left: 0; top: 0; width: 0; height: 0; border-radius: 8px; background: #3a3833; opacity: 0; pointer-events: none; z-index: 0; }
+.tabs.pill-ready .tab-pill { opacity: 1;
+  transition: transform .28s cubic-bezier(.32,.72,.35,1), width .28s cubic-bezier(.32,.72,.35,1), height .28s ease, opacity .15s ease; }
+/* Nada de fundo próprio na aba selecionada — nem sob o mouse. O cursor está
+   justamente sobre a aba que acabou de ser clicada, e um fundo opaco ali pintaria
+   o destino antes de a pílula chegar, escondendo o percurso. Sem a regra, o fundo
+   do hover (que já estava lá) dissolve em 180ms enquanto a pílula desliza, e ela
+   fica sendo o único indicador de seleção. */
+.tabs.pill-ready button.on { background: transparent; }
 .ranges { position: relative; }
 .range-custom {
   position: absolute;
@@ -142,11 +179,21 @@ svg text { fill: #9a968d; font-size: 11px; }
 #view-dashboard.dash-scroll #view-projetos:not(.hide) { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #view-dashboard.dash-scroll .ranklist { flex: 0 1 auto; min-height: 0; max-height: none; }
 .rrow { display: contents; }
-/* Label com clamp de 2 linhas: quebra dentro da coluna (limitada a 40%) e, se
-   passar de 2 linhas, corta com reticências. overflow-wrap:anywhere permite
-   quebrar caminhos sem espaço e mantém o teto de fit-content(40%). Curtos ficam
-   em 1 linha. */
-.rrow .rlabel { min-width: 0; color: #e8e6e1; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* Rótulo em UMA linha, cortado no MEIO como no Finder do macOS: as duas metades
+   do nome encolhem juntas (o flex-shrink é proporcional ao tamanho de cada uma),
+   deixando à mostra mais ou menos a mesma quantidade de texto no começo e no fim.
+   O corte é do CSS, então alargar a janela revela mais caracteres sem
+   re-renderizar, e toda linha tem a mesma altura por mais longo que seja o nome.
+   O nome completo fica no tooltip (title da linha). */
+.rrow .rlabel { min-width: 0; color: #e8e6e1; display: flex; overflow: hidden; white-space: nowrap; }
+/* A reticência única fica aqui, no fim da primeira metade. */
+.rrow .rlabel .lhead { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A segunda metade precisa ser cortada no COMEÇO (o fim do nome é o que
+   identifica o item). Um flex interno alinhado ao fim faz o excesso transbordar
+   — e ser cortado — pela esquerda, sem recorrer a direction: rtl, que reordena
+   pontuação no começo e no fim do texto. */
+.rrow .rlabel .ltail { min-width: 0; overflow: hidden; display: flex; justify-content: flex-end; }
+.rrow .rlabel .ltail > span { flex: none; }
 .rrow .rbar { background: #2e2d29; border-radius: 6px; height: 22px; overflow: hidden; }
 .rrow .rbar > span { display: block; height: 100%; border-radius: 6px; min-width: 2px; }
 .rrow .rval { color: #9a968d; text-align: right; white-space: nowrap; }
@@ -159,6 +206,44 @@ svg text { fill: #9a968d; font-size: 11px; }
 .skel-line.val { height: 22px; width: 40%; }
 .codex-skel-chart { height: 260px; margin-top: 14px; border-radius: 10px; background: #34322d; animation: skel-pulse 1.2s ease-in-out infinite; }
 .hide { display: none; }
+
+/* ===== Contêineres que crescem/encolhem =====
+   Libera a interpolação entre um tamanho fixo e `auto` (Chromium 129+). Sem isso
+   uma transição de height para `auto` simplesmente não anima e o bloco salta; em
+   runtimes antigos a declaração é ignorada e volta o comportamento seco, sem
+   quebrar nada. */
+:root { interpolate-size: allow-keywords; }
+
+/* Padrão para os blocos que aparecem/somem dentro de um formulário ou painel
+   (`[hidden]` no JS): em vez de o contêiner saltar de tamanho, a altura cresce e
+   encolhe animada. Margem e padding entram junto, senão sobra uma faixa de
+   espaço quando o bloco está fechado. O `display` também é transicionado: com
+   `allow-discrete` o `display: none` só entra em vigor no fim da saída, e o
+   `@starting-style` dá o estado de onde a entrada começa — sem ele o bloco
+   apareceria direto na altura final. */
+.anima-altura { overflow: hidden;
+  transition: height .22s ease, opacity .16s ease, margin-block .22s ease, padding-block .22s ease, display .22s allow-discrete; }
+/* display: none é o estado FINAL; o allow-discrete acima o segura até a saída
+   terminar. Deixar o bloco em display: block manteria os campos fechados
+   focáveis pelo Tab e anunciados por leitores de tela. */
+.anima-altura[hidden] { display: none; height: 0; opacity: 0; margin-block: 0; padding-block: 0; }
+@starting-style { .anima-altura:not([hidden]) { height: 0; opacity: 0; margin-block: 0; padding-block: 0; } }
+/* Troca de abas (Configurações, Dashboard Claude e Dashboard Codex). A classe
+   `entrando` é reposta pelo JS a cada troca (ver anima.ts) em vez de a animação
+   ficar pendurada num estado como .on: assim ela não depende de o painel "nascer"
+   junto com o recálculo de layout da animação de altura — o que fazia o fade
+   falhar de vez em quando. */
+@keyframes tab-in { from { opacity: 0; } to { opacity: 1; } }
+/* `backwards`: entre a classe entrar e o primeiro quadro da animação existe uma
+   brecha em que o elemento seria pintado com a opacidade base (1) — o conteúdo
+   aparecia inteiro, sumia e só então fazia o fade. Com o fill-mode ele já nasce
+   no estado do `from`. */
+.entrando { animation: tab-in .7s ease backwards; }
+/* Altura do painel acompanhando a aba escolhida; a classe só existe durante a
+   troca, fora dela a altura volta a ser do conteúdo. */
+.anima-altura-troca { overflow: hidden; transition: height .3s ease; }
+/* Blocos que já estavam abertos na aba que entra não devem "nascer" animando. */
+.trocando-aba .anima-altura { transition: none; }
 
 /* tooltips flutuantes (posicao fixa na viewport) */
 .pill { position: fixed; z-index: 10; background: #fff; color: #1a1915; font-size: 13px; font-weight: 600;
@@ -309,7 +394,7 @@ select {
 .provider-head { display: flex; align-items: center; gap: 13px; padding: 13px 15px; }
 /* Corpo com os campos do provedor: desabilitado/esmaecido quando o provedor está desativado. */
 .provider-body { padding: 0 15px 14px; display: flex; flex-direction: column; gap: 14px; }
-.provider-body > .field { margin-bottom: 0; }
+.provider-body > .field, .provider-body > .auth-status { margin-bottom: 0; }
 .provider-body.is-off { opacity: .45; }
 /* O `display: flex` acima venceria o `[hidden]` do navegador (regra de autor >
    folha padrão), e o corpo escondido pela UI continuaria aparecendo. */
@@ -394,10 +479,18 @@ select {
 .pv-mode { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 7px; cursor: pointer; }
 .pv-mode > input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
 .pv-mode .pv { width: 100%; }
-.pv-mode .pv-screen { border-width: 2px; }
+/* A transição na regra base vale para os dois cartões ao mesmo tempo: ao escolher
+   outro modo, o que perde a seleção esmaece a borda laranja enquanto o escolhido
+   a ganha. */
+.pv-mode .pv-screen { border-width: 2px; transition: border-color .14s ease, box-shadow .14s ease; }
 .pv-mode > input:checked ~ .pv .pv-screen { border-color: #d97757; box-shadow: 0 0 0 2px rgba(217, 119, 87, .35); }
 .pv-mode > input:focus-visible ~ .pv .pv-screen { border-color: #d97757; }
-.pv-mode-name { font-size: 12px; color: #9a968d; }
+/* Hover só no cartão NÃO selecionado: depois do clique o cursor fica justamente
+   sobre o escolhido, e uma borda de hover ali pintaria a cor final antes da
+   transição, escondendo o fade — o mesmo problema que a pílula das abas teve. */
+.pv-mode:hover > input:not(:checked) ~ .pv .pv-screen { border-color: #6b665c; box-shadow: 0 0 0 2px rgba(232, 230, 225, .07); }
+.pv-mode:hover > input:not(:checked) ~ .pv-mode-name { color: #e8e6e1; }
+.pv-mode-name { font-size: 12px; color: #9a968d; transition: color .14s ease; }
 .pv-mode > input:checked ~ .pv-mode-name { color: #f2f0ea; font-weight: 600; }
 
 /* Widget flutuante desenhado dentro da mini-tela (logo acima da barra), tentando
@@ -444,12 +537,31 @@ svg.pv-ico { display: block; }
 .btn.save:hover { background: #e08a6d; }
 .btn.save:disabled { opacity: .55; cursor: default; }
 .winonly { color: #6f6c64; font-size: 11px; border: 1px solid #34322d; border-radius: 6px; padding: 1px 6px; margin-left: 8px; }
-.settings-head { display: flex; align-items: center; gap: 12px; }
+/* Alinha pela linha de base: o aviso é bem menor que o título e, centralizado,
+   ficava flutuando acima da linha dele. O recuo à direita casa com o padding
+   interno do .panel logo abaixo, então o texto para na mesma coluna do conteúdo
+   do painel em vez de encostar na borda da tela. O deslocamento vertical é
+   relativo (não empurra o layout) e desce o aviso um pouco abaixo da linha de
+   base, deixando-o mais perto do painel do que do título. */
+.settings-head { display: flex; align-items: baseline; gap: 12px; }
 .settings-head h1 { margin-right: auto; }
-.msg { font-size: 13.5px; }
+.settings-head .msg { margin-right: 18px; position: relative; top: 5px; }
+.msg { font-size: 13.5px; transition: opacity .3s ease; }
+.msg.is-fading { opacity: 0; }
 .msg.ok { color: #7fc99a; }
 .msg.err { color: #e0816f; }
 .loading { color: #9a968d; padding: 40px 0; text-align: center; }
+
+/* Windows com "Efeitos de animação" desligado (prefers-reduced-motion): a
+   interface funciona igual, só sem movimento — vale para as animações antigas
+   (pulse do skeleton, flash do log) e para as novas. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
 
 /* Telas estreitas: vira menu horizontal no topo */
 @media (max-width: 640px) {
