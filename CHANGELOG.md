@@ -32,6 +32,10 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 ### Adicionado
 - Configurações: ao mudar qualquer opção, aparece um "Configuração salva" no canto oposto ao título da tela, confirmando que a alteração foi gravada — antes o salvamento era automático e silencioso, sem nenhum retorno visual.
 
+### Alterado
+- Todas as telas: sobra menos espaço vazio no rodapé — antes a página podia ganhar barra de rolagem por causa da própria margem, mesmo com o conteúdo praticamente cabendo na janela.
+- Configurações (aba Claude): a mensagem da última reabertura automática da sessão passou para dentro do quadro "Reabrir a sessão automaticamente", em vez de ficar solta abaixo dele.
+
 ## [0.2.53] - 2026-08-19
 
 ### Adicionado

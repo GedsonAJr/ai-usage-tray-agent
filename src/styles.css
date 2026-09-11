@@ -61,7 +61,9 @@ code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-siz
 
 /* scrollbar-gutter: reserva o espaco da barra de rolagem mesmo sem scroll, para
    a largura do conteudo nao "pular" quando a barra aparece/some. */
-.content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 28px 28px 48px; }
+/* A folga de baixo é menor que a de cima: 48px sobrando embaixo faziam a página
+   rolar por causa da própria margem, mesmo com o conteúdo praticamente cabendo. */
+.content { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 28px 28px 20px; }
 .view { display: none; max-width: 880px; margin: 0 auto; }
 .view.on { display: block; }
 
@@ -309,7 +311,7 @@ select {
 .provider-head { display: flex; align-items: center; gap: 13px; padding: 13px 15px; }
 /* Corpo com os campos do provedor: desabilitado/esmaecido quando o provedor está desativado. */
 .provider-body { padding: 0 15px 14px; display: flex; flex-direction: column; gap: 14px; }
-.provider-body > .field { margin-bottom: 0; }
+.provider-body > .field, .provider-body > .auth-status { margin-bottom: 0; }
 .provider-body.is-off { opacity: .45; }
 /* O `display: flex` acima venceria o `[hidden]` do navegador (regra de autor >
    folha padrão), e o corpo escondido pela UI continuaria aparecendo. */
@@ -444,8 +446,15 @@ svg.pv-ico { display: block; }
 .btn.save:hover { background: #e08a6d; }
 .btn.save:disabled { opacity: .55; cursor: default; }
 .winonly { color: #6f6c64; font-size: 11px; border: 1px solid #34322d; border-radius: 6px; padding: 1px 6px; margin-left: 8px; }
-.settings-head { display: flex; align-items: center; gap: 12px; }
+/* Alinha pela linha de base: o aviso é bem menor que o título e, centralizado,
+   ficava flutuando acima da linha dele. O recuo à direita casa com o padding
+   interno do .panel logo abaixo, então o texto para na mesma coluna do conteúdo
+   do painel em vez de encostar na borda da tela. O deslocamento vertical é
+   relativo (não empurra o layout) e desce o aviso um pouco abaixo da linha de
+   base, deixando-o mais perto do painel do que do título. */
+.settings-head { display: flex; align-items: baseline; gap: 12px; }
 .settings-head h1 { margin-right: auto; }
+.settings-head .msg { margin-right: 18px; position: relative; top: 5px; }
 .msg { font-size: 13.5px; transition: opacity .3s ease; }
 .msg.is-fading { opacity: 0; }
 .msg.ok { color: #7fc99a; }
