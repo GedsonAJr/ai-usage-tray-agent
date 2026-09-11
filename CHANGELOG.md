@@ -30,6 +30,11 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 ## [Não lançado]
 
 ### Adicionado
+- Configurações: ao mudar qualquer opção, aparece um "Configuração salva" no canto oposto ao título da tela, confirmando que a alteração foi gravada — antes o salvamento era automático e silencioso, sem nenhum retorno visual.
+
+## [0.2.53] - 2026-08-19
+
+### Adicionado
 - Claude: a reabertura automática da sessão agora tem dois modos — "Assim que expira" (o comportamento atual) e "Em horários fixos", em que você escolhe os horários do dia em que a sessão (5h) deve ser aberta.
 
 ### Corrigido

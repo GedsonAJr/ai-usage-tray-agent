@@ -316,10 +316,12 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
 Não há botão "Salvar": as alterações têm **auto-save** (com debounce) — qualquer
 mudança grava o `config.json` sozinha (com normalização: clamp de intervalo/fonte,
 validação de cor) e o app aplica tudo em ~1s, **sem reiniciar e sem disparar um
-envio extra** ao Loki. O autostart é aplicado na hora. Os valores são relidos do
-disco ao reabrir a tela. A opção **Enviar ao Loki** por provedor (aba Envio) é
-gravada à parte (via `set_envio_provider`), fora do auto-save, para preservar o
-bloco `envio` gerenciado pela tela **Envio de dados**.
+envio extra** ao Loki. Cada gravação bem-sucedida mostra um **"Configuração salva"**
+no canto oposto ao título da tela, que some sozinho em alguns segundos (no mesmo
+lugar onde aparecem os erros de salvamento). O autostart é aplicado na hora. Os
+valores são relidos do disco ao reabrir a tela. A opção **Enviar ao Loki** por
+provedor (aba Envio) é gravada à parte (via `set_envio_provider`), fora do
+auto-save, para preservar o bloco `envio` gerenciado pela tela **Envio de dados**.
 
 ### Sobre
 
