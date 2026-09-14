@@ -36,7 +36,23 @@ aprendidas. Para a arquitetura/telas, veja o `README.md`.
 - **Push no `origin/main` (fork) NÃO dispara release.** Só o merge no `main` do
   upstream recria a release rolling `main-latest`.
 - A versão é injetada como `0.2.<github.run_number>` a cada build e **precisa ser
-  monotônica** (o updater compara semver).
+  monotônica** (o updater compara semver). **Toda execução consome um `run_number`,
+  inclusive um ensaio que não publica** — por isso a numeração pula às vezes
+  (0.2.56 → 0.2.58, com o 57 gasto num ensaio). Não é erro.
+- O workflow também aceita **disparo manual**, com a entrada **`ensaio` ligada por
+  padrão**: compila e empacota os dois sistemas e **para antes de publicar**, sem tocar
+  na tag `main-latest` nem no `latest.json`.
+
+  ```sh
+  gh workflow run release.yml --repo wzuqui/ai-usage-tray-agent --ref main -f ensaio=true
+  ```
+
+  Ele existe porque o `release.yml` **não roda em PR** — é a única forma de validar uma
+  mudança nele antes que ela vire release. Duas limitações que já custaram tempo:
+  - **O ensaio pula o job `release`.** Então ele NÃO valida o `download-artifact` nem o
+    `action-gh-release`, que vivem lá. Serve para o job `build`.
+  - **O `workflow_dispatch` só enxerga refs do upstream.** Uma branch do fork é invisível
+    para ele.
 
 ## 3. Fluxo de contribuição (passo a passo)
 
@@ -56,6 +72,15 @@ Sincronizar o fork periodicamente (fast-forward simples):
 ```sh
 git fetch upstream && git switch main && git merge upstream/main && git push origin main
 ```
+
+Todo PR roda o **`ci.yml`**: `npm run build`, `cargo check` e `cargo test`, em
+**Windows e Ubuntu**. Espere os dois checks antes de mergear. O Windows não é
+redundante — o backend tem módulos sob `#[cfg(windows)]` (tray, janela, autostart) que um
+`cargo check` no Linux nem compila.
+
+`cargo fmt --check` e `clippy` **não** são porta: o `fmt` falha hoje em código
+pré-existente, e um CI que nasce vermelho vira ruído que todo mundo ignora. Para gatear,
+primeiro formate o que existe.
 
 > **Por que nunca commitar no `main` primeiro:** commitar no main e depois rebasear
 > para o PR cria dois commits com o mesmo conteúdo (já aconteceu). Como o upstream usa
@@ -118,6 +143,16 @@ git fetch upstream && git switch main && git merge upstream/main && git push ori
   `plugins.updater` (pubkey embutida + endpoint
   `https://github.com/wzuqui/ai-usage-tray-agent/releases/latest/download/latest.json`).
   Ao mexer em release/versão/updater, mantenha versão monotônica e endpoint/pubkey coerentes.
+- **O job `release` apaga os assets ANTES de publicar os novos.** É a única falha
+  não-segura do workflow: se a publicação quebrar depois da limpeza, o `latest.json` já
+  foi removido e **o OTA fica sem manifesto** até uma execução bem-sucedida (o app mostra
+  "não foi possível verificar atualizações"). Um `gh run rerun` resolve. Inverter os dois
+  passos **não** basta: a limpeza consulta *todos* os assets da release e apagaria os
+  recém-publicados.
+- **A entrega de assets do GitHub falha de vez em quando** (504, `linuxdeploy` abortando
+  no AppImage, `latest.json` inacessível por instantes). Já derrubou build e verificação
+  de update no mesmo dia. Reexecutar costuma resolver; se cair duas vezes seguidas, é
+  indisponibilidade do lado deles — espere em vez de insistir.
 - **Build local:** o build completo exige a chave de assinatura; use
   `npx tauri build --no-bundle` para pular o bundling/assinatura. Testes do dia a dia são em
   modo dev: `npm run tauri dev`.
@@ -135,6 +170,17 @@ git fetch upstream && git switch main && git merge upstream/main && git push ori
   `auth.json` a cada coleta** para pegar o token renovado. Endpoints principais:
   `wham/usage` (gauges) e `wham/usage/daily-token-usage-breakdown` (série temporal; unidade
   em **percentual**, não tokens).
+
+- **O `claude -p` da reabertura automática de sessão herda o `~/.claude/settings.json`
+  do usuário.** Num perfil de uso diário isso significa o modelo mais caro com raciocínio
+  estendido respondendo a um "Oi" — chegou a consumir 4-5% da janela de 5h só para
+  abri-la. O disparo passa `--settings '{"effortLevel":"low"}'` e `--strict-mcp-config`
+  para se isolar disso. O `--settings` do CLI **acrescenta** aos ajustes do usuário (não
+  substitui) e vale só para aquela execução — nada é gravado no `settings.json` dele.
+  **O modelo NÃO é fixado de propósito:** um nome cravado no código é uma escolha do app
+  sobre algo que é do usuário, e some sem aviso (nome completo aponta para uma release que
+  é aposentada; até um alias é nome de terceiro). Se precisar controlá-lo, vire campo nas
+  Configurações com queda segura para o padrão do CLI.
 
 ## 7. Disciplina de documentação
 

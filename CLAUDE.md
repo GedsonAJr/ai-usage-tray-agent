@@ -39,8 +39,13 @@ e as armadilhas técnicas já aprendidas. Para arquitetura e telas, veja o
 ## Verificação local antes de commitar
 
 ```sh
-npm run build                                  # tsc + vite (type-check + bundle)
+npm run build                                      # tsc + vite (type-check + bundle)
 cargo check --manifest-path src-tauri/Cargo.toml   # backend Rust
+cargo test  --manifest-path src-tauri/Cargo.toml   # testes do backend
 ```
+
+São os mesmos três comandos que o **`ci.yml`** roda em todo PR, em Windows e Ubuntu —
+rodá-los antes evita descobrir a quebra no PR. Mudanças no `release.yml` **não** são
+cobertas por esse CI: use o ensaio (ver `ONBOARDING.md`, seção "Release — onde e como sai").
 
 Para o dia a dia da UI, rode em modo dev com `npm run tauri dev`.
