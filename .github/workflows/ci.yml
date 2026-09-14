@@ -68,8 +68,14 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
-      - name: Check backend
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      # Clippy no lugar do `cargo check`: ele compila o mesmo tanto e ainda aplica
+      # os lints, entao manter os dois so' pagaria a compilacao duas vezes.
+      #
+      # Diferente do rustfmt, roda nos DOIS sistemas: o clippy so' enxerga o codigo
+      # que compila naquele alvo, e os modulos sob `#[cfg(windows)]` nao existem
+      # para ele no Linux.
+      - name: Lint backend (clippy)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       - name: Test backend
         run: cargo test --manifest-path src-tauri/Cargo.toml

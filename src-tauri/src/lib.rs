@@ -2980,7 +2980,7 @@ fn downsample_usage(
     if n == 0 {
         return Vec::new();
     }
-    let stride = ((n + USAGE_CHART_POINTS - 1) / USAGE_CHART_POINTS).max(1);
+    let stride = n.div_ceil(USAGE_CHART_POINTS).max(1);
     history
         .iter()
         .enumerate()

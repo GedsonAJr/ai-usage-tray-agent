@@ -103,10 +103,7 @@ fn parse_transcript(text: &str) -> FileAgg {
         let proj = o
             .get("cwd")
             .and_then(Value::as_str)
-            .and_then(|c| {
-                c.rsplit(|ch: char| ch == '\\' || ch == '/')
-                    .find(|s| !s.is_empty())
-            })
+            .and_then(|c| c.rsplit(['\\', '/']).find(|s| !s.is_empty()))
             .map(|s| s.to_string());
 
         if let Some(session_id) = o.get("sessionId").and_then(Value::as_str) {
