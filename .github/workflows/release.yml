@@ -173,25 +173,6 @@ jobs:
           echo "latest.json gerado:"
           cat latest.json
 
-      # A release main-latest e' rolante e os nomes dos artefatos carregam a
-      # versao (0.2.<run>), entao builds diferentes geram nomes diferentes e os
-      # antigos nao sao sobrescritos. Apaga todos os assets atuais antes de
-      # publicar os novos, mantendo a release so' com o conjunto da build atual.
-      # Seguro para o OTA: os apps so' leem o latest.json (versao atual).
-      - name: Limpa assets antigos da release rolling
-        shell: bash
-        run: |
-          gh release view main-latest --repo "$GITHUB_REPOSITORY" \
-            --json assets -q '.assets[].name' 2>/dev/null \
-            | while read -r asset; do
-                [ -n "$asset" ] || continue
-                echo "removendo asset antigo: $asset"
-                gh release delete-asset main-latest "$asset" \
-                  --repo "$GITHUB_REPOSITORY" --yes || true
-              done || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Publish rolling release
         uses: softprops/action-gh-release@v3
         with:
@@ -210,6 +191,39 @@ jobs:
             dist-release/*.AppImage
             dist-release/latest.json
           fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A release main-latest e' rolante e os nomes dos artefatos carregam a versao
+      # (0.2.<run>), entao builds diferentes geram nomes diferentes e os antigos
+      # nao sao sobrescritos — precisam ser apagados para a release ficar so' com o
+      # conjunto da build atual.
+      #
+      # Este passo roda DEPOIS de publicar, e nao antes, de proposito. Antes, uma
+      # falha na publicacao deixava a release ja' esvaziada: o latest.json tinha
+      # sido apagado e nao fora reposto, entao TODO app instalado passava a receber
+      # "nao foi possivel verificar atualizacoes" ate' alguem reexecutar o
+      # workflow. Publicando primeiro, uma falha aborta aqui e o conjunto anterior
+      # continua servindo — os apps seguem na versao antiga, que e' o pior aceitavel.
+      #
+      # Inverter a ordem sozinho nao bastava: a consulta devolve TODOS os assets,
+      # inclusive os recem-publicados, e apagaria a propria build. Por isso a lista
+      # do que fica e' lida do diretorio que acabou de subir, e nao repetida a mao
+      # — assim as duas nao tem como divergir.
+      - name: Limpa assets de builds anteriores
+        shell: bash
+        run: |
+          atuais=$(cd dist-release && ls *.msi *.AppImage latest.json 2>/dev/null)
+          echo "mantendo:"; echo "$atuais" | sed 's/^/  /'
+          gh release view main-latest --repo "$GITHUB_REPOSITORY" \
+            --json assets -q '.assets[].name' 2>/dev/null \
+            | while read -r asset; do
+                [ -n "$asset" ] || continue
+                printf '%s\n' "$atuais" | grep -qxF "$asset" && continue
+                echo "removendo asset de build anterior: $asset"
+                gh release delete-asset main-latest "$asset" \
+                  --repo "$GITHUB_REPOSITORY" --yes || true
+              done || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

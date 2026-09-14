@@ -143,12 +143,16 @@ primeiro formate o que existe.
   `plugins.updater` (pubkey embutida + endpoint
   `https://github.com/wzuqui/ai-usage-tray-agent/releases/latest/download/latest.json`).
   Ao mexer em release/versão/updater, mantenha versão monotônica e endpoint/pubkey coerentes.
-- **O job `release` apaga os assets ANTES de publicar os novos.** É a única falha
-  não-segura do workflow: se a publicação quebrar depois da limpeza, o `latest.json` já
-  foi removido e **o OTA fica sem manifesto** até uma execução bem-sucedida (o app mostra
-  "não foi possível verificar atualizações"). Um `gh run rerun` resolve. Inverter os dois
-  passos **não** basta: a limpeza consulta *todos* os assets da release e apagaria os
-  recém-publicados.
+- **O job `release` publica ANTES de limpar, e a ordem é deliberada.** A limpeza existe
+  porque os nomes carregam a versão (`0.2.<run>`), então builds diferentes geram nomes
+  diferentes e os antigos não são sobrescritos. Quando ela vinha **antes** da publicação,
+  uma falha ali deixava a release esvaziada: o `latest.json` tinha sido apagado sem ser
+  reposto, e **todo app instalado passava a receber "não foi possível verificar
+  atualizações"** até alguém reexecutar o workflow. Publicando primeiro, uma falha aborta
+  antes da limpeza e o conjunto anterior continua servindo.
+  A lista do que **fica** é lida do diretório que acabou de subir, e não repetida à mão —
+  se fosse só inverter os passos, a consulta devolveria *todos* os assets, inclusive os
+  recém-publicados, e a build se apagaria sozinha.
 - **A entrega de assets do GitHub falha de vez em quando** (504, `linuxdeploy` abortando
   no AppImage, `latest.json` inacessível por instantes). Já derrubou build e verificação
   de update no mesmo dia. Reexecutar costuma resolver; se cair duas vezes seguidas, é
