@@ -691,6 +691,8 @@ CHANGELOG.md          # changelog (fonte das novidades exibidas no app)
 src/
   main.ts             # shell: navegacao entre Envio de dados, Uso atual, Dashboards, Configuracoes e Sobre
   ipc.ts              # camada de IPC unificada: invoke nativo (Tauri) ou fetch /api/invoke (navegador)
+  anima.ts            # animacoes compartilhadas de troca de tela/aba (altura do painel + fade do conteudo)
+  tabs.ts             # pilula deslizante das barras de abas (um fundo por barra, que anda ate a aba clicada)
   envio.ts            # tela "Envio de dados" (pausa/envio por provedor, historico)
   usage.ts            # tela "Uso atual" (consome get_usage; rebusca sozinha, sem botão manual)
   usage-format.ts     # helpers de formatacao/icones compartilhados (uso, reset, cores)

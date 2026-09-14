@@ -29,6 +29,11 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Corrigido
+- As animações de troca de aba e de tela ficaram estáveis: trocar de aba rápido não deixa mais o painel preso no tamanho da aba anterior, cortando o conteúdo novo; entrar nas abas Ferramentas e Projetos da Dashboard Claude passou a animar a altura como a saída já fazia; e voltar para uma tela pelo menu lateral não repete mais a animação da última troca de aba nem reabre do zero os blocos já abertos das Configurações.
+
+## [0.2.54] - 2026-09-11
+
 ### Adicionado
 - Configurações: ao mudar qualquer opção, aparece um "Configuração salva" no canto oposto ao título da tela, confirmando que a alteração foi gravada — antes o salvamento era automático e silencioso, sem nenhum retorno visual.
 - A troca de telas e de abas agora é animada (o conteúdo aparece com um fade e o painel acompanha a altura da aba escolhida, em vez de saltar), e as abas ganharam realce ao passar o mouse, com o fundo da aba selecionada deslizando até a aba clicada.

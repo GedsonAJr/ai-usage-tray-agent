@@ -238,10 +238,16 @@ svg text { fill: #9a968d; font-size: 11px; }
    brecha em que o elemento seria pintado com a opacidade base (1) — o conteúdo
    aparecia inteiro, sumia e só então fazia o fade. Com o fill-mode ele já nasce
    no estado do `from`. */
-.entrando { animation: tab-in .7s ease backwards; }
+.entrando { animation: tab-in .3s ease backwards; }
 /* Altura do painel acompanhando a aba escolhida; a classe só existe durante a
-   troca, fora dela a altura volta a ser do conteúdo. */
-.anima-altura-troca { overflow: hidden; transition: height .3s ease; }
+   troca, fora dela a altura volta a ser do conteúdo.
+   `flex-shrink: 0`: enquanto a altura está sendo conduzida por um valor inline,
+   o pai não pode encolher o painel. Nas abas de lista do Dashboard Claude ele
+   vira item de uma coluna flex do tamanho da janela (ver .dash-scroll), e a
+   altura de PARTIDA — maior que a janela, vinda de uma aba que rolava — era
+   clampada para caber: ao ENTRAR em Ferramentas/Projetos o painel já aparecia no
+   tamanho final e o conteúdo só saltava; ao sair, animava. */
+.anima-altura-troca { overflow: hidden; transition: height .3s ease; flex-shrink: 0; }
 /* Blocos que já estavam abertos na aba que entra não devem "nascer" animando. */
 .trocando-aba .anima-altura { transition: none; }
 
