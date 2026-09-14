@@ -414,6 +414,20 @@ const SESSAO_AUTO_MODO_AGENDADO: &str = "agendado";
 /// janela, nao obter uma resposta util — e quanto mais curta, menos cota consome.
 const SESSAO_AUTO_MENSAGEM: &str = "Oi";
 
+/// Ajustes validos so' para o disparo. O `--settings` do CLI **acrescenta** aos do
+/// usuario em vez de substitui-los, entao o modelo que ele escolheu continua
+/// valendo: aqui so' o esforco e' rebaixado.
+///
+/// Por que isso importa: o `claude -p` herda o `~/.claude/settings.json`, e num
+/// perfil de uso diario o `effortLevel` costuma estar alto. Um "Oi" respondido com
+/// raciocinio estendido gera um bloco grande de tokens de saida — os que mais
+/// pesam na cota da janela de 5h — e o disparo passa a consumir vaias vezes o que
+/// a mensagem sugere. Abrir a janela nao precisa de raciocinio nenhum.
+///
+/// O modelo NAO e' fixado de proposito: um nome cravado aqui (ainda que um alias)
+/// e' uma escolha do app sobre algo que e' do usuario, e sai do ar sem aviso.
+const SESSAO_AUTO_SETTINGS: &str = r#"{"effortLevel":"low"}"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UsageMetric {
     usuario: String,
@@ -2040,6 +2054,10 @@ fn sessao_auto_slot_devido(
 /// - remove `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` do processo filho — com uma
 ///   delas setada o CLI iria para a API paga, que e' outro pool e **nao** abre a
 ///   janela da assinatura;
+/// - rebaixa o esforco de raciocinio (ver `SESSAO_AUTO_SETTINGS`) e corta os
+///   servidores MCP: sao os dois lados da conta de um disparo que so' precisa
+///   existir — o raciocinio infla a saida, e as definicoes de ferramenta de cada
+///   servidor MCP incham o prompt de sistema;
 /// - stdin fechado (o CLI nunca fica esperando digitacao); stdout e stderr sao
 ///   capturados e, na falha, viram o detalhe do erro (ver `erro_do_cli`) — no
 ///   sucesso o texto e' descartado;
@@ -2061,6 +2079,12 @@ fn run_claude_session_opener(
     command
         .arg("-p")
         .arg(SESSAO_AUTO_MENSAGEM)
+        .arg("--settings")
+        .arg(SESSAO_AUTO_SETTINGS)
+        // Sem nenhum `--mcp-config` junto, isto significa NENHUM servidor MCP: as
+        // definicoes de ferramenta deles entrariam inteiras no prompt de sistema,
+        // e o disparo nao usa ferramenta alguma.
+        .arg("--strict-mcp-config")
         .current_dir(&workdir)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")

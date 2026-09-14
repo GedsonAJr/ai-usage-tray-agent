@@ -927,6 +927,12 @@ function syncProviderNotes(): void {
 /// entrada no painel escolhido (ver anima.ts) — sem isso o painel salta de
 /// tamanho, já que cada aba tem uma quantidade diferente de campos.
 function activateTab(tab: string): void {
+  const painel = document.querySelector<HTMLElement>('.stab[data-spanel="' + tab + '"]');
+  // Reclicar a aba que já está aberta não pode refazer nada: sem conteúdo novo
+  // para revelar, o fade de entrada tocaria de novo e a aba piscaria à toa. Aqui
+  // a aba atual mora no DOM (não há variável de estado), então quem responde é o
+  // próprio painel.
+  if (!painel || painel.classList.contains("on")) return;
   animaTrocaDeAba(
     $("settings-form"),
     () => {
@@ -935,7 +941,7 @@ function activateTab(tab: string): void {
       document.querySelectorAll(".stab").forEach((s) =>
         s.classList.toggle("on", (s as HTMLElement).dataset.spanel === tab));
     },
-    document.querySelector<HTMLElement>('.stab[data-spanel="' + tab + '"]'),
+    painel,
   );
 }
 

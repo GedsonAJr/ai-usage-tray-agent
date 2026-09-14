@@ -83,7 +83,6 @@ function windowBlock(
   timeOnly: boolean,
   series: HistPoint[],
   key: string,
-  showChart: boolean,
 ): string {
   if (pct === undefined || pct === null) {
     return `<div class="uwin">
@@ -94,17 +93,23 @@ function windowBlock(
   const width = Math.max(0, Math.min(100, pct));
   let reset: string;
   if (resetIso) {
-    const when = timeOnly
-      ? `<div class="ur-line"><span class="ur-k">Horário:</span> <span class="u-time">${fmtTime(resetIso)}</span></div>`
-      : `<div class="ur-exact">${fmtExact(resetIso)}</div>`;
-    reset = `<div class="ur-line"><span class="ur-k">Reset em</span> <span class="u-remain" data-reset="${escapeHtml(resetIso)}">${fmtRemaining(resetIso)}</span></div>${when}`;
+    // A janela de 5h reseta sempre no mesmo dia, então só o horário basta; a
+    // semanal pode cair em qualquer dia e leva a data junto.
+    const quando = timeOnly
+      ? `<span class="ur-k">Horário:</span> <span class="u-time">${fmtTime(resetIso)}</span>`
+      : `<span class="ur-k">Quando:</span> <span class="u-time">${fmtExact(resetIso)}</span>`;
+    // O ponto é um item da linha, entre os dois blocos — não parte de um deles.
+    reset =
+      `<div class="ur-line"><span class="ur-k">Reset em</span> <span class="u-remain" data-reset="${escapeHtml(resetIso)}">${fmtRemaining(resetIso)}</span></div>` +
+      `<span class="ur-dot" aria-hidden="true"></span>` +
+      `<div class="ur-line ur-when">${quando}</div>`;
   } else {
     reset = `<div class="ur-line ur-k">Sem horário de reset.</div>`;
   }
   return `<div class="uwin">
     <div class="uwin-top"><span class="uwin-label">${label}</span><span class="uwin-pct">${pctText(pct)}%</span></div>
     <div class="ubar"><div class="ubar-fill" style="width:${width}%;background:${barColor(pct)}"></div></div>
-    ${showChart ? sparkline(series, barColor(pct), key, label) : ""}
+    ${sparkline(series, barColor(pct), key, label)}
     <div class="uwin-reset">${reset}</div>
   </div>`;
 }
@@ -195,11 +200,10 @@ function renderProvider(label: string, provKey: "claude" | "codex", prov: Provid
   }
   // O "atualizado há…" foi para o subtítulo da página (renderSub); o card não o repete.
   const hist = DATA?.history?.[provKey];
-  const showChart = DATA?.chartEnabled !== false;
   return `${open("uprov")}${head("")}
     <div class="uwins">
-      ${windowBlock("Sessão (5h)", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session", showChart)}
-      ${windowBlock("Semanal (7d)", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly", showChart)}
+      ${windowBlock("Sessão (5h)", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session")}
+      ${windowBlock("Semanal (7d)", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly")}
     </div>
   </div>`;
 }
@@ -309,12 +313,29 @@ function wireCharts(): void {
   });
 }
 
+/// Verdadeiro enquanto o aviso de desligar o gráfico está na tela. Nesse intervalo
+/// o switch mostra a INTENÇÃO do usuário (desligado) e o `render()` periódico não
+/// pode reescrevê-lo com o estado ainda salvo no config — era o que o fazia voltar
+/// sozinho para ligado, segundos depois do clique, com o diálogo ainda aberto.
+/// Quem o devolve para ligado é o cancelamento.
+let confirmandoGrafico = false;
+
+/// Mostra ou esconde os mini-gráficos. A classe mora no contêiner dos cards
+/// justamente porque ele sobrevive ao re-render: é assim que a transição roda ao
+/// trocar o switch sem que nada anime quando os cards são reconstruídos.
+function aplicaGrafico(): void {
+  el("usage-cards").classList.toggle("sem-grafico", DATA?.chartEnabled === false);
+}
+
 function render(): void {
   if (!DATA) return;
   // Sincroniza o toggle do cabeçalho com o estado atual (antes da guarda, para
   // refletir mudanças de config feitas por fora também).
   const cb = document.getElementById("usage-chart-toggle") as HTMLInputElement | null;
-  if (cb) cb.checked = DATA.chartEnabled !== false;
+  if (cb && !confirmandoGrafico) cb.checked = DATA.chartEnabled !== false;
+  // Antes do innerHTML abaixo: os cards novos já nascem no estado certo, em vez
+  // de nascerem abertos e fechar num segundo momento.
+  aplicaGrafico();
   // Reconstrói os cards só quando os dados mudam; entre reloads iguais (a cada 2s)
   // apenas roda o tick, preservando o hover do gráfico e poupando trabalho.
   const sig = signature(DATA);
@@ -390,14 +411,24 @@ function bindChartToggle(): void {
     const enabling = cb.checked;
     try {
       if (!enabling && DATA?.chartWarnOnDisable !== false) {
-        const res = await confirmDisableChart();
+        confirmandoGrafico = true;
+        let res: { dontAskAgain: boolean } | null;
+        try {
+          res = await confirmDisableChart();
+        } finally {
+          confirmandoGrafico = false;
+        }
         if (!res) { cb.checked = true; return; } // cancelado: reverte o toggle
         DATA = await invoke<Usage>("set_usage_chart", { enabled: false, dontAskAgain: res.dontAskAgain });
       } else {
         DATA = await invoke<Usage>("set_usage_chart", { enabled: enabling });
       }
-      lastSig = "";
-      render();
+      // Sem reconstruir os cards aqui: o gráfico que está saindo precisa continuar
+      // no DOM para poder encolher, e ao desligar o backend já limpou o histórico
+      // — um re-render agora o trocaria pelo aviso de "coletando", de um quadro
+      // para o outro. A reconstrução vem na próxima coleta e já encontra tudo no
+      // estado certo (`chartEnabled` faz parte da assinatura).
+      aplicaGrafico();
     } catch (e) {
       cb.checked = DATA?.chartEnabled !== false; // reverte o visual em caso de erro
       el("usage-foot").textContent =

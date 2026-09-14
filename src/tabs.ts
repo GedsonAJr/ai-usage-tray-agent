@@ -1,9 +1,10 @@
-// Pílula deslizante das barras de abas (Dashboard Claude, Dashboard Codex e
-// Configurações). Em vez de o fundo do estado selecionado sumir de uma aba e
-// aparecer na outra, existe UM fundo por barra que anda até a aba clicada.
+// Pílula deslizante das barras de seleção: as de aba (Dashboard Claude,
+// Dashboard Codex e Configurações) e as de período (30d/7d/Personalizado dos dois
+// dashboards). Em vez de o fundo do estado selecionado sumir de um botão e
+// aparecer no outro, existe UM fundo por barra que anda até o botão clicado.
 //
-// O módulo não conhece quem troca de aba: cada barra observa a classe `on` dos
-// seus próprios botões (MutationObserver), então funciona com os três handlers
+// O módulo não conhece quem troca a seleção: cada barra observa a classe `on` dos
+// seus próprios botões (MutationObserver), então funciona com os handlers
 // existentes sem alterá-los. Um ResizeObserver reposiciona a pílula quando a
 // barra muda de largura (janela redimensionada, abas que quebram em duas linhas)
 // e quando ela reaparece — as barras vivem dentro de telas escondidas com
@@ -12,9 +13,9 @@
 // É um aprimoramento progressivo: sem o JS (ou antes da primeira medida) a aba
 // selecionada mantém o fundo próprio do CSS, e a tela continua correta.
 
-/// Instala a pílula em todas as barras de abas da página.
+/// Instala a pílula em todas as barras de seleção da página.
 export function initTabSliders(): void {
-  document.querySelectorAll<HTMLElement>(".tabs").forEach(initTabSlider);
+  document.querySelectorAll<HTMLElement>(".tabs, .ranges").forEach(initTabSlider);
 }
 
 function initTabSlider(bar: HTMLElement): void {
@@ -28,7 +29,7 @@ function initTabSlider(bar: HTMLElement): void {
   let posicionada = false;
 
   const mover = (): void => {
-    const ativo = bar.querySelector<HTMLElement>("button.on");
+    const ativo = bar.querySelector<HTMLElement>(":scope > button.on");
     // Barra escondida (a tela dona não está ativa) ou sem seleção: não há o que
     // medir. Some e espera o ResizeObserver avisar que reapareceu.
     if (!ativo || ativo.offsetWidth === 0) {
@@ -49,10 +50,20 @@ function initTabSlider(bar: HTMLElement): void {
     bar.classList.add("pill-ready");
   };
 
+  // Só os botões DIRETOS: nas barras de período, o popover do range personalizado
+  // é filho da barra e tem botões próprios, que não participam da seleção.
+  const botoes = bar.querySelectorAll<HTMLElement>(":scope > button");
+
   // Só os botões são observados: `pill-ready` entra e sai da própria barra, e
   // observá-la aqui faria a callback se realimentar em laço.
   const obs = new MutationObserver(mover);
-  bar.querySelectorAll("button").forEach((b) => obs.observe(b, { attributes: true, attributeFilter: ["class"] }));
-  new ResizeObserver(mover).observe(bar);
+  botoes.forEach((b) => obs.observe(b, { attributes: true, attributeFilter: ["class"] }));
+
+  // A barra cobre o reaparecimento e o redimensionamento da janela; os botões
+  // cobrem quem muda de largura sozinho — o "Personalizado" troca o rótulo pelo
+  // intervalo escolhido, e a pílula precisa acompanhar esse novo tamanho.
+  const ro = new ResizeObserver(mover);
+  ro.observe(bar);
+  botoes.forEach((b) => ro.observe(b));
   mover();
 }

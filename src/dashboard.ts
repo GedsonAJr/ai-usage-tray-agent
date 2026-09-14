@@ -411,6 +411,9 @@ const painelDash = (): HTMLElement => document.querySelector("#view-dashboard > 
 /// abas de lista o painel é limitado pela altura da janela (.dash-scroll), por
 /// isso a altura de destino é medida em vez de `auto`.
 function trocaAba(nova: string, alvo: EventTarget | null): void {
+  // Reclicar a aba que já está aberta não pode refazer nada: sem conteúdo novo
+  // para revelar, o fade de entrada tocaria de novo e a aba piscaria à toa.
+  if (nova === tab) return;
   animaTrocaDeAba(painelDash(), () => {
     tab = nova;
     setOn(".tabs", alvo);
@@ -440,11 +443,18 @@ export function initDashboard(): void {
         return;
       }
       // Preset (30d/7d): "desaplica" o range personalizado e restaura o rótulo.
-      range = r;
-      customBtn.textContent = CUSTOM_LABEL;
-      setOn(".ranges", b);
-      setCustomOpen(false);
-      render();
+      // Reclicar o período já aplicado não faz nada; com um range personalizado
+      // ativo (range === "custom") o clique sempre vale, pois é o que o desaplica.
+      if (r === range) return;
+      // Só a ALTURA acompanha: a aba continua a mesma, nada aparece nem some, e um
+      // fade aqui apagaria por um instante conteúdo que segue na tela.
+      animaTrocaDeAba(painelDash(), () => {
+        range = r;
+        customBtn.textContent = CUSTOM_LABEL;
+        setOn(".ranges", b);
+        setCustomOpen(false);
+        render();
+      });
     });
 
   const from = el("range-from") as HTMLInputElement;
@@ -454,15 +464,17 @@ export function initDashboard(): void {
 
   (el("range-apply") as HTMLButtonElement).onclick = () => {
     if (!(from.value && to.value)) return;
-    customFrom = from.value;
-    customTo = to.value;
-    range = "custom";
-    // O botão "Personalizado" passa a exibir o range escolhido.
-    const { from: f, to: t } = customRange();
-    customBtn.textContent = fmtShort(f) + " – " + fmtShort(t);
-    setOn(".ranges", customBtn);
-    setCustomOpen(false);
-    render();
+    animaTrocaDeAba(painelDash(), () => {
+      customFrom = from.value;
+      customTo = to.value;
+      range = "custom";
+      // O botão "Personalizado" passa a exibir o range escolhido.
+      const { from: f, to: t } = customRange();
+      customBtn.textContent = fmtShort(f) + " – " + fmtShort(t);
+      setOn(".ranges", customBtn);
+      setCustomOpen(false);
+      render();
+    });
   };
 
   // Fecha o popover ao clicar fora (exceto no próprio botão "Personalizado") ou

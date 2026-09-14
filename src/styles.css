@@ -98,21 +98,27 @@ h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap:
 .tabs button.on:hover, .ranges button.on:hover { background: #46433d; }
 
 /* Pílula deslizante do estado selecionado (ver tabs.ts): um único fundo por
-   barra, que anda até a aba clicada em vez de aparecer/sumir. Ela fica ATRÁS dos
-   botões, que por isso ganham empilhamento próprio. Enquanto o JS não mediu a
-   aba ativa (barra ainda escondida), nada disso vale e o fundo continua sendo o
-   do próprio botão — a tela nunca fica sem indicar a seleção. */
+   barra, que anda até o botão clicado em vez de aparecer/sumir. Vale para as
+   barras de aba e para as de período. Ela fica ATRÁS dos botões, que por isso
+   ganham empilhamento próprio. Enquanto o JS não mediu o botão ativo (barra ainda
+   escondida), nada disso vale e o fundo continua sendo o do próprio botão — a
+   tela nunca fica sem indicar a seleção.
+   Nas barras de período só os botões DIRETOS entram: o popover do range
+   personalizado mora dentro de .ranges e tem botões próprios, que não fazem parte
+   da seleção (ele se resolve acima de tudo, em z-index 30). */
 .tabs { position: relative; }
-.tabs button { position: relative; z-index: 1; }
-.tabs .tab-pill { position: absolute; left: 0; top: 0; width: 0; height: 0; border-radius: 8px; background: #3a3833; opacity: 0; pointer-events: none; z-index: 0; }
-.tabs.pill-ready .tab-pill { opacity: 1;
+.tabs > button, .ranges > button { position: relative; z-index: 1; }
+.tabs .tab-pill, .ranges .tab-pill { position: absolute; left: 0; top: 0; width: 0; height: 0; border-radius: 8px; background: #3a3833; opacity: 0; pointer-events: none; z-index: 0; }
+.tabs.pill-ready .tab-pill, .ranges.pill-ready .tab-pill { opacity: 1;
   transition: transform .28s cubic-bezier(.32,.72,.35,1), width .28s cubic-bezier(.32,.72,.35,1), height .28s ease, opacity .15s ease; }
-/* Nada de fundo próprio na aba selecionada — nem sob o mouse. O cursor está
-   justamente sobre a aba que acabou de ser clicada, e um fundo opaco ali pintaria
-   o destino antes de a pílula chegar, escondendo o percurso. Sem a regra, o fundo
+/* Nada de fundo próprio no botão selecionado — nem sob o mouse. O cursor está
+   justamente sobre o que acabou de ser clicado, e um fundo opaco ali pintaria o
+   destino antes de a pílula chegar, escondendo o percurso. Sem a regra, o fundo
    do hover (que já estava lá) dissolve em 180ms enquanto a pílula desliza, e ela
    fica sendo o único indicador de seleção. */
-.tabs.pill-ready button.on { background: transparent; }
+.tabs.pill-ready button.on, .ranges.pill-ready button.on { background: transparent; }
+/* Já era relative por causa do popover do range personalizado, que se ancora
+   nela; a pílula depende do mesmo. */
 .ranges { position: relative; }
 .range-custom {
   position: absolute;
@@ -152,6 +158,13 @@ svg text { fill: #9a968d; font-size: 11px; }
 .lrow .dot { width: 11px; height: 11px; border-radius: 3px; }
 .lrow .io { color: #9a968d; }
 .lrow .pct { text-align: right; font-weight: 600; }
+/* Barras do gráfico do Codex. Trocar de aba NÃO recria o <svg> (ver
+   codex-dashboard.ts): as barras que já estão em cena são levadas até os
+   valores novos, e é esta transição que faz o movimento da troca. `x`, `y`,
+   `width` e `height` são propriedades de geometria do SVG2 — animáveis por
+   CSS mesmo escritas como atributo de apresentação, que é como o render as
+   escreve. */
+#codex-barras rect { transition: x .3s ease, y .3s ease, width .3s ease, height .3s ease, fill .3s ease; }
 /* Uma única grade para a lista toda. Com display:contents nas linhas, os 3
    filhos de cada linha (label · barra · valor) entram direto nesta grade, então
    as colunas se alinham entre TODAS as linhas: as barras ficam com exatamente o
@@ -238,10 +251,24 @@ svg text { fill: #9a968d; font-size: 11px; }
    brecha em que o elemento seria pintado com a opacidade base (1) — o conteúdo
    aparecia inteiro, sumia e só então fazia o fade. Com o fill-mode ele já nasce
    no estado do `from`. */
-.entrando { animation: tab-in .7s ease backwards; }
-/* Altura do painel acompanhando a aba escolhida; a classe só existe durante a
-   troca, fora dela a altura volta a ser do conteúdo. */
-.anima-altura-troca { overflow: hidden; transition: height .3s ease; }
+.entrando { animation: tab-in .3s ease backwards; }
+/* Altura do painel acompanhando a aba escolhida. A classe cobre a troca INTEIRA,
+   da primeira medida até soltar a altura no fim — não só o trecho animado.
+   `overflow: hidden` não está aqui só para recortar: ele cria um contexto de
+   formatação, e um contêiner sem padding próprio (o formulário das Configurações)
+   muda de tamanho ao ganhá-lo — a margem do último filho, que colapsava para fora,
+   passa a contar por dentro. Medindo fora desse contexto e animando dentro dele, o
+   painel encolhia essa margem ao começar e a recuperava num salto ao terminar.
+   `flex-shrink: 0`: enquanto a altura é conduzida por um valor inline, o pai não
+   pode encolher o painel. Nas abas de lista do Dashboard Claude ele vira item de
+   uma coluna flex do tamanho da janela (ver .dash-scroll), e a altura de PARTIDA
+   — maior que a janela, vinda de uma aba que rolava — era clampada para caber: ao
+   ENTRAR em Ferramentas/Projetos nada animava; só a saída animava. */
+.anima-altura-troca { overflow: hidden; flex-shrink: 0; }
+/* A transição entra só no quadro em que a altura de destino é aplicada. Ligada
+   antes, ela pegaria a limpeza do height inline que a medida precisa fazer e
+   animaria PARA `auto` em vez de soltar na hora — ver anima.ts. */
+.anima-altura-troca.anima-altura-correndo { transition: height .3s ease; }
 /* Blocos que já estavam abertos na aba que entra não devem "nascer" animando. */
 .trocando-aba .anima-altura { transition: none; }
 
@@ -278,12 +305,23 @@ svg text { fill: #9a968d; font-size: 11px; }
 .uwin-pct.muted { color: #6f6c64; font-size: 20px; }
 .ubar { height: 8px; background: #1c1b18; border-radius: 999px; margin: 10px 0; overflow: hidden; }
 .ubar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
-.uwin-reset { font-size: 13px; margin-top: 10px; }
-.ur-line { color: #c9c5bc; }
+/* "Reset em …" e o "Quando/Horário" numa linha só, separados por um ponto. Nunca
+   quebram: o que não couber é cortado com reticências (ver .ur-when). */
+.uwin-reset { font-size: 13px; margin-top: 10px;
+  display: flex; align-items: center; gap: 9px; }
+.ur-line { color: #c9c5bc; white-space: nowrap; }
 .ur-k { color: #9a968d; }
 .u-remain { font-weight: 600; color: #e8e6e1; }
 .u-time { font-weight: 600; color: #e8e6e1; }
-.ur-exact { color: #807c74; font-size: 12.5px; margin-top: 2px; }
+/* Ponto separador: item PRÓPRIO da linha, e não parte de um dos blocos. É isso
+   que lhe dá a mesma folga dos dois lados (o gap acima) e o centro vertical
+   exato — como pseudo-elemento ele seguia a linha de base do texto e ficava um
+   pouco abaixo do meio óptico, que os números e as maiúsculas puxam para cima. */
+.ur-dot { flex: none; width: 3px; height: 3px; border-radius: 50%; background: #6f6c64; }
+/* Quem encolhe e corta é o bloco do "quando": "Reset em …" é curto e é a
+   informação principal da linha. `min-width: 0` é o que permite a um item flex
+   encolher abaixo do próprio conteúdo — sem ele o texto vazaria em vez de cortar. */
+.ur-when { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .uwin-na { color: #6f6c64; font-size: 13px; margin-top: 8px; }
 /* Cabeçalho da tela "Uso atual": título+subtítulo à esquerda, toggle à direita,
    centralizado verticalmente contra o bloco de títulos (não só o h1). */
@@ -339,6 +377,19 @@ svg text { fill: #9a968d; font-size: 11px; }
   padding-left: 7%; color: #6f6c64; font-size: 10.5px; letter-spacing: .2px; }
 .uchart-na { margin-top: 10px; background: #1c1b18;
   border-radius: 8px; padding: 14px 10px; color: #6f6c64; font-size: 12px; text-align: center; }
+/* Mostrar/esconder os mini-gráficos (switch "Gráfico" do cabeçalho): eles crescem
+   e encolhem no lugar, em vez de sumirem e o card saltar de tamanho.
+   A classe fica no CONTÊINER dos cards, não em cada gráfico, porque o contêiner
+   SOBREVIVE ao re-render. É isso que faz a transição rodar ao trocar o switch e,
+   ao mesmo tempo, nada animar quando os cards são reconstruídos a cada coleta —
+   transição não roda no primeiro estilo de um elemento recém-criado.
+   O padding entra junto, senão o gráfico fechado deixaria uma faixa de 12px. O
+   recorte cabe no padding de 8px da moldura, então o ponto do hover (desenhado
+   com overflow visível) não é cortado. */
+.uchart, .uchart-na { overflow: hidden;
+  transition: height .26s ease, opacity .2s ease, margin-block .26s ease, padding-block .26s ease; }
+#usage-cards.sem-grafico .uchart, #usage-cards.sem-grafico .uchart-na {
+  height: 0; opacity: 0; margin-block: 0; padding-block: 0; }
 .usage-footer { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .usage-footer .foot { flex: 1; margin-top: 0; }
 
@@ -819,10 +870,19 @@ svg.pv-ico { display: block; }
 .sobre-repo-line { margin-top: 14px; padding-top: 14px; border-top: 1px solid #34322d; font-size: 13px; color: #807c74; }
 .sobre-nov-title { margin: 0 0 12px; padding-bottom: 12px; border-bottom: 1px solid #34322d; font-size: 18px; }
 .sobre-nov-head .envio-h2 { margin: 0; }
-/* Novidades dentro da aba Sobre: lista solta no painel (sem caixa própria),
-   só com altura fixa e rolagem interna. */
+/* Novidades ocupando o resto da janela: a tela vira uma coluna flex e o painel
+   das novidades fica com a sobra, em vez de a lista parar num teto fixo e deixar
+   um vão embaixo. Mesmo arranjo das abas de lista do Dashboard Claude (ver
+   .dash-scroll): só a lista rola, e a janela não ganha uma segunda barra.
+   A folga de baixo continua sendo a do .content — a tela mede 100% da área ÚTIL
+   dele, que já exclui o padding, então a lista para antes da borda. */
+#view-sobre.view.on { display: flex; flex-direction: column; height: 100%; }
+#view-sobre > .sobre-nov { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Novidades dentro da aba Sobre: lista solta no painel (sem caixa própria), com
+   rolagem interna. Sem o contexto flex acima (ou em telas estreitas, onde a tela
+   volta a ser um bloco) ela simplesmente cresce e quem rola é a página. */
 .sobre-novidades {
-  max-height: 300px; overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
   padding-right: 6px;
 }
 .sobre-novidades::-webkit-scrollbar { width: 8px; }

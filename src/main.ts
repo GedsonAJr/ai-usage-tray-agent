@@ -1,6 +1,7 @@
 // Shell do app: troca entre as seções (Uso atual / Dashboard Claude /
 // Configurações) pelo menu lateral. Janela única, aberta pelo clique esquerdo
 // no tray ou pelo item "Abrir". A seção padrão é "Uso atual".
+import { silenciaEntrada } from "./anima";
 import { initCodexDashboard, loadCodexDashboard } from "./codex-dashboard";
 import { initDashboard, loadDashboard } from "./dashboard";
 import { initEnvio, loadEnvio } from "./envio";
@@ -27,6 +28,12 @@ function activate(view: string): void {
     b.classList.toggle("on", (b as HTMLElement).dataset.view === view));
   document.querySelectorAll(".view").forEach((s) =>
     s.classList.toggle("on", s.id === "view-" + view));
+  // A tela que entra sai de `display: none`, e com isso tudo lá dentro conta como
+  // renderizado pela primeira vez: sem esta guarda, os blocos já abertos das
+  // Configurações voltavam a crescer do zero a cada visita. A tela em si continua
+  // com o seu fade (.view.on no CSS) — só as animações internas são caladas.
+  const alvo = document.getElementById("view-" + view);
+  if (alvo) silenciaEntrada(alvo);
   if (view === "envio") initEnvio();
   else if (view === "usage") void loadUsage();
   else if (view === "dashboard") initDashboard();

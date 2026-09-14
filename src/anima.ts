@@ -15,8 +15,9 @@
 //    Claude o painel é limitado pela altura da janela (ver .dash-scroll), então
 //    `auto` daria a altura do conteúdo inteiro — muito maior que o destino real.
 
-/// Duração da animação de altura. O fade do conteúdo tem vida própria (CSS) e
-/// pode ser mais longo: ele não depende deste relógio.
+/// Duração da animação de altura. O fade do conteúdo (CSS) acompanha este valor:
+/// quando ele era bem mais longo, o painel já tinha parado de crescer e o texto
+/// ainda estava translúcido — o movimento parecia continuar depois de terminar.
 const ALTURA_MS = 300;
 
 interface Pendente {
@@ -29,10 +30,41 @@ const pendentes = new WeakMap<HTMLElement, Pendente>();
 
 /// Reinicia a animação de entrada de um elemento que muda de conteúdo sem trocar
 /// de nó (o gráfico do Codex) ou que precisa animar de forma determinística.
+///
+/// A classe SAI no fim da animação. Deixá-la pendurada fazia o fade tocar de novo
+/// sozinho: sair de `display: none` reinicia as animações CSS do elemento, então
+/// toda volta à tela pelo menu lateral reproduzia o fade da última troca de aba —
+/// por cima do fade da própria tela, que dura outro tanto.
+///
+/// Só `animationend` limpa. `animationcancel` não serve: remover a classe aqui em
+/// cima já cancela a animação anterior, e o evento chega depois de a nova ter
+/// começado — ele apagaria justamente a classe que acabamos de pôr.
 export function reiniciaEntrada(node: HTMLElement): void {
   node.classList.remove("entrando");
   void node.offsetWidth;
   node.classList.add("entrando");
+  // Mesma referência de função a cada chamada: o DOM ignora listeners repetidos,
+  // então trocas seguidas não empilham nada.
+  node.addEventListener("animationend", limpaEntrada, { once: true });
+}
+
+function limpaEntrada(e: Event): void {
+  if ((e as AnimationEvent).animationName !== "tab-in") return;
+  (e.currentTarget as HTMLElement).classList.remove("entrando");
+}
+
+/// Cala, pelo primeiro quadro, as animações de entrada dos blocos de um contêiner
+/// que acabou de aparecer. Sair de `display: none` faz o navegador tratar tudo lá
+/// dentro como renderizado pela primeira vez: o `@starting-style` de
+/// `.anima-altura` volta a valer e os blocos JÁ abertos crescem do zero de novo,
+/// como se o usuário tivesse acabado de ligá-los. É a mesma guarda que
+/// `animaTrocaDeAba` usa na troca de abas, aplicada à troca de telas.
+export function silenciaEntrada(container: HTMLElement): void {
+  container.classList.add("trocando-aba");
+  // Fixa o estilo de primeira renderização ainda com as transições desligadas —
+  // é neste recálculo que o `@starting-style` seria consumido.
+  void container.offsetHeight;
+  requestAnimationFrame(() => container.classList.remove("trocando-aba"));
 }
 
 /// Executa `troca` (o que de fato muda a aba: classes, render) levando a altura
@@ -50,7 +82,26 @@ export function animaTrocaDeAba(
   // meio desta, apagaria a altura e a classe da animação nova.
   pend.cancelar?.();
 
+  // O contexto de formatação em que a animação vai correr precisa valer JÁ na
+  // primeira medida: é ele que decide se a margem do último filho conta por
+  // dentro do contêiner ou colapsa para fora (ver .anima-altura-troca no CSS).
+  // Medindo de um lado e animando do outro, o formulário das Configurações — que
+  // não tem padding próprio — perdia essa margem ao começar e a recuperava num
+  // salto ao soltar a altura. Numa troca sobre outra a classe já está lá.
+  container.classList.add("anima-altura-troca");
+
   const antes = container.offsetHeight;
+
+  // Só agora a transição sai, depois de `antes` capturar o que está na tela neste
+  // instante (no meio de uma troca anterior, o valor interpolado). Ela precisa
+  // sair antes da limpeza do height logo abaixo: com `interpolate-size` (ver
+  // styles.css) `height: auto` virou interpolável, então limpar o height com a
+  // transição ligada não solta mais a altura — começa uma transição PARA `auto`,
+  // e a medida do destino leria o primeiro quadro dela, ou seja, a altura antiga.
+  // Era o que travava o painel no tamanho da aba anterior no clique rápido:
+  // `depois == antes`, nenhuma transição, nenhum `transitionend`, e o conteúdo
+  // novo ficava cortado até o relógio de segurança soltar.
+  container.classList.remove("anima-altura-correndo");
 
   // Blocos internos que animam a própria altura (`.anima-altura` + [hidden]) não
   // podem "nascer" animando quando a aba aparece: seria a metade de baixo da aba
@@ -66,7 +117,7 @@ export function animaTrocaDeAba(
 
   container.style.height = antes + "px";
   void container.offsetHeight;
-  container.classList.add("anima-altura-troca");
+  container.classList.add("anima-altura-correndo");
   container.style.height = depois + "px";
 
   for (const painel of paineis) if (painel) reiniciaEntrada(painel);
@@ -86,7 +137,7 @@ export function animaTrocaDeAba(
   // mudança de altura não há transição, logo não há evento.
   const solta = (): void => {
     pend.cancelar?.();
-    container.classList.remove("anima-altura-troca");
+    container.classList.remove("anima-altura-troca", "anima-altura-correndo");
     container.style.height = "";
   };
   const aoFim = (e: TransitionEvent): void => {
