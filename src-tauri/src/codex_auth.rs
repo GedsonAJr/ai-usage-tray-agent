@@ -138,8 +138,7 @@ fn base64url(bytes: &[u8]) -> String {
 /// `code_verifier` do PKCE).
 fn random_base64url(len: usize) -> Result<String, String> {
     let mut buf = vec![0u8; len];
-    getrandom::getrandom(&mut buf)
-        .map_err(|error| format!("Falha ao gerar aleatoriedade: {error}"))?;
+    getrandom::fill(&mut buf).map_err(|error| format!("Falha ao gerar aleatoriedade: {error}"))?;
     Ok(base64url(&buf))
 }
 

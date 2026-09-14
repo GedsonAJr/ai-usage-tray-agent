@@ -313,7 +313,7 @@ fn gerar_token() -> String {
     let mut buf = [0u8; 32];
     // Em caso (improvavel) de falha do RNG do SO, o token fica previsivel — mas o
     // proprio login exige o PIN, entao a falha nao concede acesso por si so'.
-    let _ = getrandom::getrandom(&mut buf);
+    let _ = getrandom::fill(&mut buf);
     URL_SAFE_NO_PAD.encode(buf)
 }
 
