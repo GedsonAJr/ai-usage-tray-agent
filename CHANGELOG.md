@@ -29,6 +29,8 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+## [0.2.55] - 2026-09-14
+
 ### Adicionado
 - Uso atual: na janela semanal, o reset que cai hoje ou amanhã aparece como "hoje, 17:00" e "amanhã, 17:00", em vez da data por extenso.
 - Dashboards: o fundo da seleção também desliza entre os botões de período (30d/7d/Personalizado), como já acontecia nas abas.
