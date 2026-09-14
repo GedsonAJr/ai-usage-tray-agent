@@ -82,10 +82,26 @@ export function fmtRemaining(iso: string): string {
   return `${Math.floor(ms / 1000)}s`;
 }
 
-/// Data/hora exata do reset, no fuso local: "qui., 19/06, 17:00".
+/// Distância em dias de CALENDÁRIO até `d`: 0 é hoje, 1 é amanhã. Conta viradas
+/// de meia-noite, não intervalos de 24h — 23h de hoje para amanhã dá 1, e das 8h
+/// às 23h de hoje dá 0. Comparar as meia-noites também sobrevive ao horário de
+/// verão, em que um dia pode ter 23 ou 25 horas.
+function diasDeCalendario(d: Date): number {
+  const meiaNoite = (x: Date): number => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  return Math.round((meiaNoite(d) - meiaNoite(new Date())) / 86400000);
+}
+
+/// Data/hora exata do reset, no fuso local: "qui., 19/06, 17:00". Hoje e amanhã
+/// aparecem pelo nome ("hoje, 17:00") — lê-se mais rápido, e é justamente quando
+/// a data importa menos que a hora.
 export function fmtExact(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
+  const dias = diasDeCalendario(d);
+  if (dias === 0 || dias === 1) {
+    const hora = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    return (dias === 0 ? "hoje" : "amanhã") + ", " + hora;
+  }
   return d.toLocaleString("pt-BR", {
     weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });

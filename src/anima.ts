@@ -82,16 +82,26 @@ export function animaTrocaDeAba(
   // meio desta, apagaria a altura e a classe da animação nova.
   pend.cancelar?.();
 
+  // O contexto de formatação em que a animação vai correr precisa valer JÁ na
+  // primeira medida: é ele que decide se a margem do último filho conta por
+  // dentro do contêiner ou colapsa para fora (ver .anima-altura-troca no CSS).
+  // Medindo de um lado e animando do outro, o formulário das Configurações — que
+  // não tem padding próprio — perdia essa margem ao começar e a recuperava num
+  // salto ao soltar a altura. Numa troca sobre outra a classe já está lá.
+  container.classList.add("anima-altura-troca");
+
   const antes = container.offsetHeight;
 
-  // Desliga a transição ANTES de medir o destino. Com `interpolate-size` (ver
+  // Só agora a transição sai, depois de `antes` capturar o que está na tela neste
+  // instante (no meio de uma troca anterior, o valor interpolado). Ela precisa
+  // sair antes da limpeza do height logo abaixo: com `interpolate-size` (ver
   // styles.css) `height: auto` virou interpolável, então limpar o height com a
-  // transição ativa não solta mais a altura: começa uma transição PARA `auto`, e
-  // a medida abaixo leria o primeiro quadro dela — ou seja, a altura antiga.
-  // Numa troca em cima de outra (clique rápido) isso dava `depois == antes`:
-  // nenhuma animação, e o painel ficava preso no tamanho da aba anterior,
-  // cortando o conteúdo novo, até o relógio de segurança soltar.
-  container.classList.remove("anima-altura-troca");
+  // transição ligada não solta mais a altura — começa uma transição PARA `auto`,
+  // e a medida do destino leria o primeiro quadro dela, ou seja, a altura antiga.
+  // Era o que travava o painel no tamanho da aba anterior no clique rápido:
+  // `depois == antes`, nenhuma transição, nenhum `transitionend`, e o conteúdo
+  // novo ficava cortado até o relógio de segurança soltar.
+  container.classList.remove("anima-altura-correndo");
 
   // Blocos internos que animam a própria altura (`.anima-altura` + [hidden]) não
   // podem "nascer" animando quando a aba aparece: seria a metade de baixo da aba
@@ -107,7 +117,7 @@ export function animaTrocaDeAba(
 
   container.style.height = antes + "px";
   void container.offsetHeight;
-  container.classList.add("anima-altura-troca");
+  container.classList.add("anima-altura-correndo");
   container.style.height = depois + "px";
 
   for (const painel of paineis) if (painel) reiniciaEntrada(painel);
@@ -127,7 +137,7 @@ export function animaTrocaDeAba(
   // mudança de altura não há transição, logo não há evento.
   const solta = (): void => {
     pend.cancelar?.();
-    container.classList.remove("anima-altura-troca");
+    container.classList.remove("anima-altura-troca", "anima-altura-correndo");
     container.style.height = "";
   };
   const aoFim = (e: TransitionEvent): void => {

@@ -29,8 +29,26 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Adicionado
+- Uso atual: na janela semanal, o reset que cai hoje ou amanhã aparece como "hoje, 17:00" e "amanhã, 17:00", em vez da data por extenso.
+- Dashboards: o fundo da seleção também desliza entre os botões de período (30d/7d/Personalizado), como já acontecia nas abas.
+
+### Alterado
+- Sobre: a lista de Novidades passou a ocupar o resto da altura da janela, em vez de parar numa faixa fixa e deixar um vão embaixo — cabem bem mais versões de uma vez.
+- Uso atual: o tempo até o reset e o horário/data ficam lado a lado, separados por um ponto, e o que não couber é cortado com reticências.
+- Uso atual: ligar e desligar o gráfico ficou animado — os mini gráficos crescem e encolhem no lugar, em vez de os cards saltarem de tamanho.
+- Dashboard Codex: ao trocar de aba, as barras do gráfico se transformam até os valores da aba escolhida, em vez de o gráfico inteiro ser redesenhado de uma vez.
+- Dashboards: trocar o período anima a altura do painel, como já acontecia ao trocar de aba.
+- Dashboards: clicar no período ou na aba que já está selecionada não refaz mais nada (antes o Dashboard Codex ia buscar os mesmos dados de novo).
+- Claude: a reabertura automática da sessão passou a disparar com o raciocínio no mínimo e sem servidores MCP, consumindo bem menos da cota da janela de 5h; o modelo continua sendo o que você configurou no Claude Code, e nada nas suas configurações é alterado.
+
 ### Corrigido
 - As animações de troca de aba e de tela ficaram estáveis: trocar de aba rápido não deixa mais o painel preso no tamanho da aba anterior, cortando o conteúdo novo; entrar nas abas Ferramentas e Projetos da Dashboard Claude passou a animar a altura como a saída já fazia; e voltar para uma tela pelo menu lateral não repete mais a animação da última troca de aba nem reabre do zero os blocos já abertos das Configurações.
+- Dashboard Codex: trocar de período logo depois de abrir a tela, ou logo depois de voltar para o app, podia não ter efeito — o botão mudava e o conteúdo continuava sendo o do período anterior.
+- Configurações: ao trocar de aba, o painel encolhia alguns pixels no começo da animação e os recuperava num salto no fim.
+- Dashboard Codex: o conteúdo piscava ao alternar entre as abas Origens e Modelos.
+- Clicar numa aba que já está aberta não faz mais o conteúdo dela piscar.
+- Uso atual: ao desligar o gráfico, o interruptor voltava sozinho para ligado enquanto o aviso de confirmação ainda estava na tela.
 
 ## [0.2.54] - 2026-09-11
 

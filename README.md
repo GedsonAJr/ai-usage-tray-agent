@@ -213,7 +213,10 @@ Os dados vêm do comando `get_envio_state`; as ações usam `set_envio_paused`,
 
 Mostra, para **Claude** e **Codex**, o uso da **sessão
 (5h)** e **semanal (7d)** com barra de progresso, tempo restante para o reset
-(contagem regressiva ao vivo) e o horário/data exatos do próximo reset. O
+(contagem regressiva ao vivo) e o horário/data exatos do próximo reset — os dois
+numa linha só, separados por um ponto, com o que não couber cortado por
+reticências. Na janela semanal a data vira **"hoje"** ou **"amanhã"** quando o
+reset cai num desses dias (a conta é por virada de meia-noite, não por 24h). O
 subtítulo da página traz o **"Atualizado há Xs"** do dado em cache (sobe ao vivo
 e zera a cada nova coleta). Os dados vêm do comando `get_usage` (lê o mesmo
 snapshot do tray/barra, sem rede).
@@ -338,7 +341,8 @@ Tela dedicada (última opção do menu lateral). Mostra:
   progresso); senão, **Buscar atualizações** força uma nova verificação inline.
 - **Link do repositório** (abre no navegador via `open_external`).
 - **Novidades**: o histórico de versões lido do `CHANGELOG.md` (via
-  `get_changelog`), em uma área de **altura fixa com rolagem**.
+  `get_changelog`), ocupando **o resto da altura da janela** (só a lista rola, e a
+  página não ganha uma segunda barra de rolagem).
 
 ## Inicialização automática
 
@@ -672,6 +676,10 @@ Claude:
 - A **reabertura automática de sessão** depende do Claude Code CLI instalado e
   logado com a assinatura; sem ele a opção fica sem efeito e a falha aparece na
   aba Claude das Configurações
+- O disparo roda com o **raciocínio no mínimo** e **sem servidores MCP**, para
+  custar o mínimo possível da cota: ele só precisa existir para abrir a janela.
+  O **modelo não é fixado** — vale o que estiver no seu `~/.claude/settings.json`,
+  e nada ali é alterado (o `--settings` do CLI só vale para aquela execução)
 
 Codex:
 
