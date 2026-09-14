@@ -100,7 +100,10 @@ pub fn collect(
     // Limita a 90 dias (máximo da API) e impede datas futuras.
     let today = Local::now().date_naive();
     let parse = |s: &str| NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d").ok();
-    let (start, end) = match (start.as_deref().and_then(parse), end.as_deref().and_then(parse)) {
+    let (start, end) = match (
+        start.as_deref().and_then(parse),
+        end.as_deref().and_then(parse),
+    ) {
         (Some(mut s), Some(mut e)) => {
             if s > e {
                 std::mem::swap(&mut s, &mut e);

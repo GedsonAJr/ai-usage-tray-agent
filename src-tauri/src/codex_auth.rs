@@ -118,7 +118,9 @@ fn login_cancel_flag() -> &'static Mutex<Option<Arc<AtomicBool>>> {
 
 /// Sinaliza o cancelamento do login pelo navegador em andamento (se houver).
 pub fn cancel() {
-    let slot = login_cancel_flag().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let slot = login_cancel_flag()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(flag) = slot.as_ref() {
         flag.store(true, Ordering::SeqCst);
     }
@@ -136,7 +138,8 @@ fn base64url(bytes: &[u8]) -> String {
 /// `code_verifier` do PKCE).
 fn random_base64url(len: usize) -> Result<String, String> {
     let mut buf = vec![0u8; len];
-    getrandom::getrandom(&mut buf).map_err(|error| format!("Falha ao gerar aleatoriedade: {error}"))?;
+    getrandom::getrandom(&mut buf)
+        .map_err(|error| format!("Falha ao gerar aleatoriedade: {error}"))?;
     Ok(base64url(&buf))
 }
 
@@ -284,7 +287,11 @@ fn wait_for_code(state: &str, cancel_flag: &AtomicBool) -> Result<String, String
                 .get("error_description")
                 .cloned()
                 .unwrap_or_else(|| oauth_error.clone());
-            respond_text(request, 400, &format!("Falha na autenticacao: {description}"));
+            respond_text(
+                request,
+                400,
+                &format!("Falha na autenticacao: {description}"),
+            );
             return Err(format!("Erro OAuth: {description}"));
         }
         match params.get("code") {
@@ -339,7 +346,9 @@ fn post_token(client: &Client, form: &[(&str, &str)], acao: &str) -> Result<Toke
     let status = response.status();
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
-        return Err(format!("A OpenAI recusou a requisição ao {acao} (HTTP {status}): {body}"));
+        return Err(format!(
+            "A OpenAI recusou a requisição ao {acao} (HTTP {status}): {body}"
+        ));
     }
     response
         .json::<TokenResponse>()
@@ -453,15 +462,22 @@ pub fn login(client: &Client, config_dir: &Path) -> Result<Value, String> {
     // registra a flag deste login para que o botao "Cancelar" possa interrompe-lo.
     cancel();
     let cancel_flag = Arc::new(AtomicBool::new(false));
-    *login_cancel_flag().lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        Some(cancel_flag.clone());
+    *login_cancel_flag()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(cancel_flag.clone());
 
     let outcome = login_flow(client, config_dir, &cancel_flag);
 
     // Limpa o slot se ainda for o nosso (nao pisa num login mais novo).
     {
-        let mut slot = login_cancel_flag().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if slot.as_ref().map(|flag| Arc::ptr_eq(flag, &cancel_flag)).unwrap_or(false) {
+        let mut slot = login_cancel_flag()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot
+            .as_ref()
+            .map(|flag| Arc::ptr_eq(flag, &cancel_flag))
+            .unwrap_or(false)
+        {
             *slot = None;
         }
     }
@@ -537,7 +553,12 @@ pub fn ensure_fresh(client: &Client, config_dir: &Path) -> Result<PathBuf, Strin
         None => true,
     };
     if needs_refresh {
-        match auth.tokens.refresh_token.clone().filter(|token| !token.is_empty()) {
+        match auth
+            .tokens
+            .refresh_token
+            .clone()
+            .filter(|token| !token.is_empty())
+        {
             Some(refresh_token) => match exchange_refresh(client, &refresh_token) {
                 Ok(tokens) => {
                     // Sucesso limpa qualquer `refresh_error` anterior (via

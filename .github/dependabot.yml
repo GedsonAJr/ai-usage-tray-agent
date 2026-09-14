@@ -1,0 +1,43 @@
+version: 2
+
+# O Dependabot ja' estava ligado pela INTERFACE do GitHub, mas sem este arquivo o
+# agrupamento, a frequencia e os limites nao eram versionaveis nem revisaveis em
+# PR — e dois PRs ficaram um e dois meses parados sem ninguem notar, um deles com
+# vulnerabilidade alta.
+#
+# O agrupamento e' o ponto central: sem ele, cada dependencia vira um PR, e cada
+# PR mergeado vira uma RELEASE (a versao e' o run_number). Agrupar por ecossistema
+# transforma "dez atualizacoes" em "um PR, uma release".
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      npm:
+        patterns: ["*"]
+        # Majors ficam de fora do grupo: TypeScript e Vite ja' mostraram que
+        # exigem leitura das notas de versao e PR proprio. Elas continuam vindo,
+        # so' que uma a uma.
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # As proprias actions do workflow. Nao estavam cobertas, e foi assim que quatro
+  # delas ficaram para tras ate' o GitHub avisar que o runtime Node 20 ia sair.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

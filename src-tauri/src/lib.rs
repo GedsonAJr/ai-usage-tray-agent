@@ -29,7 +29,8 @@ use serde_json::{json, Value};
 use tauri::{
     menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Runtime, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, Runtime, State, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
@@ -808,8 +809,8 @@ pub fn run() {
                 taskbar_widget::set_on_menu_command(move |id| {
                     let handle = app_handle_menu.clone();
                     let id = id.to_string();
-                    let _ = app_handle_menu
-                        .run_on_main_thread(move || handle_menu_event(&handle, &id));
+                    let _ =
+                        app_handle_menu.run_on_main_thread(move || handle_menu_event(&handle, &id));
                 });
 
                 taskbar_widget::start();
@@ -1315,7 +1316,10 @@ async fn pick_widget_background(app: AppHandle) -> Option<String> {
         use tauri_plugin_dialog::DialogExt;
         app.dialog()
             .file()
-            .add_filter("Imagens e GIFs", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+            .add_filter(
+                "Imagens e GIFs",
+                &["png", "jpg", "jpeg", "gif", "webp", "bmp"],
+            )
             .blocking_pick_file()
             .and_then(|file| file.into_path().ok())
             .map(|path| path.to_string_lossy().to_string())
@@ -1484,8 +1488,7 @@ mod widget_frame {
 #[cfg(target_os = "windows")]
 fn round_widget_window(hwnd: windows::Win32::Foundation::HWND) {
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_ROUND,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
     unsafe {
         let pref = DWMWCP_ROUND;
@@ -1580,8 +1583,13 @@ fn build_tray_menu<R: Runtime>(
         MenuItem::with_id(app, "open_logs", "Abrir pasta de logs", true, None::<&str>)?;
     let toggle_pause_item =
         MenuItem::with_id(app, "toggle_pause", pause_label, true, None::<&str>)?;
-    let check_updates_item =
-        MenuItem::with_id(app, "check_updates", "Buscar atualizações", true, None::<&str>)?;
+    let check_updates_item = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Buscar atualizações",
+        true,
+        None::<&str>,
+    )?;
 
     let quit_item = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
 
@@ -1850,28 +1858,34 @@ fn run_collection_cycle<R: Runtime>(
     // serializa-los faria o ciclo (e a janela do `cycle_lock`) somar as latencias.
     // As coletas sao puras (client + config), sem tocar no estado compartilhado;
     // o processamento (snapshot, envio, log) acontece depois, em sequencia.
-    let (codex_result, claude_result): (CollectOutcome, CollectOutcome) =
-        thread::scope(|scope| {
-            let codex_handle =
-                codex_enabled.then(|| scope.spawn(|| collect_codex_metric(&client, &config, paths)));
-            let claude_result =
-                claude_enabled.then(|| collect_claude_metric(&client, &config, paths));
-            let codex_result = codex_handle.map(|handle| {
-                handle
-                    .join()
-                    .unwrap_or_else(|_| Err("Panico durante a coleta do Codex.".to_string()))
-            });
-            (codex_result, claude_result)
+    let (codex_result, claude_result): (CollectOutcome, CollectOutcome) = thread::scope(|scope| {
+        let codex_handle =
+            codex_enabled.then(|| scope.spawn(|| collect_codex_metric(&client, &config, paths)));
+        let claude_result = claude_enabled.then(|| collect_claude_metric(&client, &config, paths));
+        let codex_result = codex_handle.map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|_| Err("Panico durante a coleta do Codex.".to_string()))
         });
+        (codex_result, claude_result)
+    });
 
     let mut had_error = false;
     if let Some(result) = codex_result {
-        had_error |=
-            handle_collected(app, paths, shared, &client, &config, "codex", result, send_codex);
+        had_error |= handle_collected(
+            app, paths, shared, &client, &config, "codex", result, send_codex,
+        );
     }
     if let Some(result) = claude_result {
         had_error |= handle_collected(
-            app, paths, shared, &client, &config, "claude", result, send_claude,
+            app,
+            paths,
+            shared,
+            &client,
+            &config,
+            "claude",
+            result,
+            send_claude,
         );
     }
 
@@ -2277,7 +2291,9 @@ fn resolve_claude_cli(config: &SessaoAutoConfig) -> Result<PathBuf, String> {
         return if path.is_file() {
             Ok(path)
         } else {
-            Err(format!("caminho do Claude Code CLI nao encontrado: {manual}"))
+            Err(format!(
+                "caminho do Claude Code CLI nao encontrado: {manual}"
+            ))
         };
     }
 
@@ -2361,7 +2377,8 @@ fn claude_cli_from_path() -> Option<PathBuf> {
         .filter(|line| {
             !cfg!(target_os = "windows")
                 || ["cmd", "exe", "bat"].iter().any(|extension| {
-                    line.to_ascii_lowercase().ends_with(&format!(".{extension}"))
+                    line.to_ascii_lowercase()
+                        .ends_with(&format!(".{extension}"))
                 })
         })
         .map(PathBuf::from)
@@ -2511,10 +2528,7 @@ fn collect_codex_metric(
         .map_err(|error| format!("Falha HTTP ao consultar Codex: {error}"))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Codex retornou status HTTP {}.",
-            response.status()
-        ));
+        return Err(format!("Codex retornou status HTTP {}.", response.status()));
     }
 
     let payload: OpenAiUsageResponse = response
@@ -2650,9 +2664,9 @@ fn collect_claude_metric(
     let five_hour = payload
         .five_hour
         .ok_or_else(|| "five_hour nao foi encontrado na resposta do Claude.".to_string())?;
-    let utilization = five_hour
-        .utilization
-        .ok_or_else(|| "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string())?;
+    let utilization = five_hour.utilization.ok_or_else(|| {
+        "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string()
+    })?;
 
     let seven_day_utilization = payload
         .seven_day
@@ -2800,8 +2814,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                 taskbar_widget::set_font_color(config.barra_tarefas.cor_fonte_rgb());
                 taskbar_widget::set_order(&config.providers.ordem);
                 let mostrar_hora = config.barra_tarefas.mostrar_hora_reset();
-                let (mostra_sessao, mostra_semanal) =
-                    parse_janelas(&config.barra_tarefas.janelas);
+                let (mostra_sessao, mostra_semanal) = parse_janelas(&config.barra_tarefas.janelas);
                 taskbar_widget::set_provider(
                     "codex",
                     config.providers.codex.habilitado
@@ -3203,9 +3216,10 @@ fn show_update_window<R: Runtime>(app: &AppHandle<R>) {
         Ok(window) => {
             let _ = window.set_focus();
         }
-        Err(error) => {
-            handle_runtime_error(app, &format!("Falha ao abrir a janela de atualização: {error}"))
-        }
+        Err(error) => handle_runtime_error(
+            app,
+            &format!("Falha ao abrir a janela de atualização: {error}"),
+        ),
     }
 }
 
@@ -3332,7 +3346,9 @@ fn metric_text(metric: Option<&UsageMetric>) -> String {
         return "--".to_string();
     };
     let session = metric.uso_percentual.map(|value| format!("{value:.1}%"));
-    let weekly = metric.uso_percentual_7d.map(|value| format!("{value:.1}% (7d)"));
+    let weekly = metric
+        .uso_percentual_7d
+        .map(|value| format!("{value:.1}% (7d)"));
     match (session, weekly) {
         (Some(session), Some(weekly)) => format!("{session} | {weekly}"),
         (Some(session), None) => session,
@@ -3463,7 +3479,10 @@ fn format_reset(iso: Option<&str>) -> Option<String> {
 fn iso_to_nanos(iso: &str) -> Result<String, String> {
     let timestamp = DateTime::parse_from_rfc3339(iso)
         .map_err(|error| format!("Timestamp invalido para Loki: {error}"))?;
-    Ok(timestamp.timestamp_nanos_opt().unwrap_or_default().to_string())
+    Ok(timestamp
+        .timestamp_nanos_opt()
+        .unwrap_or_default()
+        .to_string())
 }
 
 fn timestamp_seconds_to_iso(value: i64) -> Option<String> {
@@ -3514,7 +3533,11 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
                 .join(".config")
                 .join(APP_NAME_LINUX)
                 .join("config.json"),
-            logs_dir: home.join(".local").join("state").join(APP_NAME_LINUX).join("logs"),
+            logs_dir: home
+                .join(".local")
+                .join("state")
+                .join(APP_NAME_LINUX)
+                .join("logs"),
         });
     }
 
@@ -3658,10 +3681,7 @@ fn append_log_line(
 }
 
 fn open_append_file(path: &Path) -> Result<File, Box<dyn std::error::Error>> {
-    Ok(OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?)
+    Ok(OpenOptions::new().create(true).append(true).open(path)?)
 }
 
 /// Abre uma URL http(s) no navegador padrao do sistema. Usado pelo link do
@@ -3708,20 +3728,22 @@ async fn claude_login(app: AppHandle) -> Result<Value, String> {
     // Abre em branco de proposito: a captura limpa a sessao persistida do webview e
     // so entao navega para o login, garantindo que cada "Conectar" peca credenciais
     // (permite trocar de conta) em vez de reusar o cookie da sessao anterior.
-    let blank_url = Url::parse("about:blank")
-        .map_err(|error| format!("URL inválida: {error}"))?;
-    let window = match WebviewWindowBuilder::new(&app, "claude-login", WebviewUrl::External(blank_url))
-        .title("Entrar no Claude")
-        .inner_size(480.0, 780.0)
-        .center()
-        .build()
-    {
-        Ok(window) => window,
-        Err(error) => {
-            claude_auth::end_login(&cancel_flag);
-            return Err(format!("Falha ao abrir a janela de login do Claude: {error}"));
-        }
-    };
+    let blank_url = Url::parse("about:blank").map_err(|error| format!("URL inválida: {error}"))?;
+    let window =
+        match WebviewWindowBuilder::new(&app, "claude-login", WebviewUrl::External(blank_url))
+            .title("Entrar no Claude")
+            .inner_size(480.0, 780.0)
+            .center()
+            .build()
+        {
+            Ok(window) => window,
+            Err(error) => {
+                claude_auth::end_login(&cancel_flag);
+                return Err(format!(
+                    "Falha ao abrir a janela de login do Claude: {error}"
+                ));
+            }
+        };
 
     let flag_for_task = cancel_flag.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
@@ -3792,8 +3814,7 @@ fn capture_claude_login(
         // Uma unica org: nada a escolher, salva direto (comportamento de sempre).
         [org] => {
             let email = claude_auth::fetch_email(&client, &session_key);
-            let status =
-                claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)?;
+            let status = claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)?;
             Ok(json!({ "needsSelection": false, "status": status }))
         }
         // Varias orgs com "chat": guarda a sessao e devolve as candidatas (com o uso
@@ -3823,7 +3844,11 @@ fn capture_claude_login(
 
 /// Uso da janela de 5h (0..100) de uma org, para ajudar o usuario a identificar a org
 /// certa na tela de escolha. Melhor-esforco: qualquer falha vira `null`.
-fn claude_org_utilization(client: &Client, session_key: &str, organization_id: &str) -> Option<f64> {
+fn claude_org_utilization(
+    client: &Client,
+    session_key: &str,
+    organization_id: &str,
+) -> Option<f64> {
     let response = client
         .get(format!(
             "https://claude.ai/api/organizations/{organization_id}/usage"
@@ -3841,7 +3866,10 @@ fn claude_org_utilization(client: &Client, session_key: &str, organization_id: &
         return None;
     }
     let payload: ClaudeUsageResponse = response.json().ok()?;
-    payload.five_hour.and_then(|fh| fh.utilization).map(round_percent)
+    payload
+        .five_hour
+        .and_then(|fh| fh.utilization)
+        .map(round_percent)
 }
 
 /// Status do login do Claude pelo navegador (sem rede), para a aba Claude.
@@ -3867,7 +3895,10 @@ fn claude_login_cancel() {
 /// uma org com "chat" (ver `capture_claude_login`). Usa a sessao pendente capturada no
 /// login; devolve o status para a UI. Erro se a sessao pendente expirou (novo login).
 #[tauri::command]
-fn claude_select_org(paths: State<'_, RuntimePaths>, organization_id: String) -> Result<Value, String> {
+fn claude_select_org(
+    paths: State<'_, RuntimePaths>,
+    organization_id: String,
+) -> Result<Value, String> {
     let session_key = claude_auth::take_pending_session()
         .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
     let organization_id = organization_id.trim();
@@ -4099,7 +4130,10 @@ mod tests {
         let status = lock_sessao_auto(&shared).status.clone();
         assert_eq!(status.ultimo_ok, Some(false), "a tentativa devia falhar");
         let erro_ui = status.ultimo_erro.unwrap_or_default();
-        assert!(erro_ui.contains("Not logged in"), "UI sem o detalhe: {erro_ui}");
+        assert!(
+            erro_ui.contains("Not logged in"),
+            "UI sem o detalhe: {erro_ui}"
+        );
 
         let log = paths
             .logs_dir
@@ -4109,23 +4143,38 @@ mod tests {
             conteudo.contains("Falha ao reabrir a sessao do Claude."),
             "log sem a mensagem: {conteudo}"
         );
-        assert!(conteudo.contains("Not logged in"), "log sem o detalhe: {conteudo}");
+        assert!(
+            conteudo.contains("Not logged in"),
+            "log sem o detalhe: {conteudo}"
+        );
     }
 
     #[test]
     fn slot_devido_vale_no_horario_e_na_folga_do_ciclo() {
         let config = agendado(&["09:00", "14:00"]);
         // No horario e dentro da folga (piso de 2 min com o intervalo padrao).
-        assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 0, 0)), Some(540));
-        assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 1, 59)), Some(540));
+        assert_eq!(
+            sessao_auto_slot_devido(&config, 10, local(9, 0, 0)),
+            Some(540)
+        );
+        assert_eq!(
+            sessao_auto_slot_devido(&config, 10, local(9, 1, 59)),
+            Some(540)
+        );
         // Passou da folga: horario perdido nao e' recuperado.
         assert_eq!(sessao_auto_slot_devido(&config, 10, local(9, 2, 1)), None);
         assert_eq!(sessao_auto_slot_devido(&config, 10, local(13, 0, 0)), None);
         // Antes do horario tambem nao dispara.
         assert_eq!(sessao_auto_slot_devido(&config, 10, local(8, 59, 59)), None);
         // Intervalo de coleta longo alarga a folga (um ciclo + 1 min).
-        assert_eq!(sessao_auto_slot_devido(&config, 300, local(9, 5, 0)), Some(540));
+        assert_eq!(
+            sessao_auto_slot_devido(&config, 300, local(9, 5, 0)),
+            Some(540)
+        );
         // Sem horarios, nunca dispara.
-        assert_eq!(sessao_auto_slot_devido(&agendado(&[]), 10, local(9, 0, 0)), None);
+        assert_eq!(
+            sessao_auto_slot_devido(&agendado(&[]), 10, local(9, 0, 0)),
+            None
+        );
     }
 }

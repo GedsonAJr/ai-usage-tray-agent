@@ -123,7 +123,9 @@ fn state() -> &'static Mutex<Vec<ProviderState>> {
 /// paint): um `unwrap()` que desse panic ali estaria fazendo unwind atraves da
 /// fronteira FFI (comportamento indefinido). Recuperar o guard evita o panic.
 fn lock_state() -> std::sync::MutexGuard<'static, Vec<ProviderState>> {
-    state().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 thread_local! {
@@ -619,7 +621,9 @@ struct WidgetScan {
 
 /// True se o nome da classe e' o de um dos nossos proprios widgets.
 fn is_our_widget_class(name: &[u16]) -> bool {
-    name.iter().copied().eq("AiUsageTaskbarWidget".encode_utf16())
+    name.iter()
+        .copied()
+        .eq("AiUsageTaskbarWidget".encode_utf16())
 }
 
 unsafe extern "system" fn widget_scan_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -677,7 +681,12 @@ unsafe fn strip_widgets(taskbar: HWND, scale: f32) -> Vec<(i32, i32)> {
 /// transitorias no boot, longe da bandeja) nao sao contiguas e sao ignoradas.
 /// Retorna `None` se nada foi absorvido. Trava de seguranca: nunca ancora antes
 /// da metade da barra, evitando colar o widget ao Iniciar centralizado.
-fn cluster_edge_right(widgets: &[(i32, i32)], base: i32, gap_tol: i32, bar_width: i32) -> Option<i32> {
+fn cluster_edge_right(
+    widgets: &[(i32, i32)],
+    base: i32,
+    gap_tol: i32,
+    bar_width: i32,
+) -> Option<i32> {
     let floor = bar_width / 2;
     let mut boundary = base;
     loop {
@@ -704,7 +713,12 @@ fn cluster_edge_right(widgets: &[(i32, i32)], base: i32, gap_tol: i32, bar_width
 /// Espelho de [`cluster_edge_right`] para o lado esquerdo: borda direita do
 /// cluster colado a `base` (ponta esquerda da barra) caminhando para a direita.
 /// Trava de seguranca: nunca passa da metade da barra.
-fn cluster_edge_left(widgets: &[(i32, i32)], base: i32, gap_tol: i32, bar_width: i32) -> Option<i32> {
+fn cluster_edge_left(
+    widgets: &[(i32, i32)],
+    base: i32,
+    gap_tol: i32,
+    bar_width: i32,
+) -> Option<i32> {
     let ceil = bar_width / 2;
     let mut boundary = base;
     loop {
@@ -854,7 +868,8 @@ unsafe fn paint(hwnd: HWND) {
         // Cor de fundo/color-key amostrada da barra (mesma usada no color-key da
         // janela); o texto fica preto em barra clara e branco em barra escura.
         let key = {
-            let stored = KEY_COLORS.with(|cache| cache.borrow().get(index).copied().unwrap_or(CLR_INVALID));
+            let stored =
+                KEY_COLORS.with(|cache| cache.borrow().get(index).copied().unwrap_or(CLR_INVALID));
             if stored == CLR_INVALID {
                 compute_colors().1
             } else {
@@ -933,7 +948,10 @@ unsafe fn paint(hwnd: HWND) {
 
 unsafe fn read_hkcu_dword(subkey: &str, value_name: &str) -> Option<u32> {
     let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let value_w: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let value_w: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let mut data: u32 = 0;
     let mut size: u32 = 4;
     let error = RegGetValueW(
@@ -973,7 +991,12 @@ pub unsafe fn show_context_menu() {
     let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_CONFIG, w!("Abrir config.json"));
     let _ = AppendMenuW(menu, MF_STRING, CMD_OPEN_LOGS, w!("Abrir pasta de logs"));
     let _ = AppendMenuW(menu, MF_STRING, CMD_TOGGLE_PAUSE, pause_label);
-    let _ = AppendMenuW(menu, MF_STRING, CMD_CHECK_UPDATES, w!("Buscar atualizações"));
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        CMD_CHECK_UPDATES,
+        w!("Buscar atualizações"),
+    );
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, w!("Sair"));
 
