@@ -1,0 +1,69 @@
+name: CI
+
+# Validacao de Pull Request. Ate' entao o repositorio nao tinha NENHUMA: o
+# release.yml so' dispara em push no main, entao todo PR era mergeado sem que nada
+# compilasse — e o primeiro sinal de quebra era a release ja' quebrada.
+#
+# Roda so' em `pull_request`. O main ja' e' coberto pelo proprio release.yml, que
+# compila os dois sistemas antes de publicar; duplicar aqui seria pagar o dobro de
+# minutos pelo mesmo sinal.
+on:
+  pull_request:
+
+# Push novo no mesmo PR cancela a execucao anterior: o que importa e' o topo da
+# branch, e as antigas so' consomem fila.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verifica:
+    # Os mesmos dois sistemas que a release empacota. O Windows nao e' opcional: o
+    # backend tem modulos sob `#[cfg(windows)]` (tray, janela, autostart) que um
+    # `cargo check` no Linux nem compila — um erro ali passaria batido.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          # Chave por sistema: o cache do Windows nao serve ao Linux e vice-versa.
+          key: ci-${{ matrix.os }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tsc + vite: type-check e bundle. Tambem produz o `dist/`, que o build
+      # script do Tauri espera existir — por isso vem ANTES do cargo.
+      - name: Build frontend (tsc + vite)
+        run: npm run build
+
+      - name: Check backend
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Test backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
