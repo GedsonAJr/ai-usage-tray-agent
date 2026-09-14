@@ -32,7 +32,8 @@ use crate::{read_config, usage_value, RuntimePaths, SharedState};
 
 /// Comandos IPC que o servidor HTTP aceita — apenas leitura dos dashboards. Tudo
 /// fora desta lista e' recusado (403), mesmo autenticado.
-const COMANDOS_PERMITIDOS: &[&str] = &["get_usage", "force_collect", "get_stats", "get_codex_stats"];
+const COMANDOS_PERMITIDOS: &[&str] =
+    &["get_usage", "force_collect", "get_stats", "get_codex_stats"];
 
 /// Cookie de sessao emitido apos o login com o PIN.
 const COOKIE_NOME: &str = "aiusage_sid";
@@ -138,7 +139,10 @@ fn handle_request(
         (&Method::Post, "/api/login") => handle_login(paths, sessions, request),
         (&Method::Post, "/api/logout") => handle_logout(sessions, request),
         (&Method::Get, "/login") => {
-            let erro = raw_url.split('?').nth(1).is_some_and(|q| q.contains("erro=1"));
+            let erro = raw_url
+                .split('?')
+                .nth(1)
+                .is_some_and(|q| q.contains("erro=1"));
             respond_html(request, 200, login_page(erro));
         }
         (&Method::Post, p) if p.starts_with("/api/invoke/") => {
@@ -185,7 +189,8 @@ fn handle_login(
         .unwrap_or_else(|e| e.into_inner())
         .insert(token.clone());
 
-    let set_cookie = format!("{COOKIE_NOME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000");
+    let set_cookie =
+        format!("{COOKIE_NOME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000");
     let response = Response::empty(302)
         .with_header(header("Location", "/"))
         .with_header(header("Set-Cookie", &set_cookie));
@@ -194,7 +199,10 @@ fn handle_login(
 
 fn handle_logout(sessions: &Arc<Mutex<HashSet<String>>>, request: Request) {
     if let Some(token) = cookie_token(&request) {
-        sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&token);
+        sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&token);
     }
     let expira = format!("{COOKIE_NOME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
     let response = Response::empty(302)
@@ -227,7 +235,10 @@ fn handle_invoke(app: &AppHandle, paths: &RuntimePaths, mut request: Request, cm
         "get_stats" => crate::usage_dashboard::collect_stats(),
         "get_codex_stats" => {
             let days = args.get("days").and_then(Value::as_u64).unwrap_or(30) as u32;
-            let start = args.get("start").and_then(Value::as_str).map(str::to_string);
+            let start = args
+                .get("start")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let end = args.get("end").and_then(Value::as_str).map(str::to_string);
             crate::collect_codex_stats(paths, days, start, end)
         }
@@ -284,10 +295,7 @@ fn is_authed(sessions: &Arc<Mutex<HashSet<String>>>, request: &Request) -> bool 
 
 /// Extrai o token do cookie de sessao do cabecalho `Cookie`, se presente.
 fn cookie_token(request: &Request) -> Option<String> {
-    let header = request
-        .headers()
-        .iter()
-        .find(|h| h.field.equiv("Cookie"))?;
+    let header = request.headers().iter().find(|h| h.field.equiv("Cookie"))?;
     let valor = header.value.as_str();
     for parte in valor.split(';') {
         let parte = parte.trim();
@@ -446,11 +454,7 @@ mod tests {
     #[test]
     fn favicon_serve_icone_via_http() {
         let server = Server::http("127.0.0.1:0").expect("bind efemero");
-        let port = server
-            .server_addr()
-            .to_ip()
-            .expect("addr ip")
-            .port();
+        let port = server.server_addr().to_ip().expect("addr ip").port();
 
         let handle = thread::spawn(move || {
             if let Ok(Some(request)) = server.recv_timeout(Duration::from_secs(5)) {
@@ -464,7 +468,11 @@ mod tests {
         let response = reqwest::blocking::get(format!("http://127.0.0.1:{port}/favicon.ico"))
             .expect("GET /favicon.ico");
 
-        assert!(response.status().is_success(), "status {}", response.status());
+        assert!(
+            response.status().is_success(),
+            "status {}",
+            response.status()
+        );
         let content_type = response
             .headers()
             .get("content-type")
@@ -475,7 +483,11 @@ mod tests {
 
         let bytes = response.bytes().expect("corpo");
         assert!(!bytes.is_empty(), "favicon vazio");
-        assert_eq!(bytes.as_ref(), FAVICON_ICO, "bytes do favicon batem com o icone");
+        assert_eq!(
+            bytes.as_ref(),
+            FAVICON_ICO,
+            "bytes do favicon batem com o icone"
+        );
 
         handle.join().expect("thread do servidor");
     }
@@ -485,7 +497,11 @@ mod tests {
     #[test]
     fn favicon_embutido_e_um_ico_valido() {
         assert!(FAVICON_ICO.len() > 4, "icone curto demais");
-        assert_eq!(&FAVICON_ICO[0..4], &[0x00, 0x00, 0x01, 0x00], "cabecalho .ico");
+        assert_eq!(
+            &FAVICON_ICO[0..4],
+            &[0x00, 0x00, 0x01, 0x00],
+            "cabecalho .ico"
+        );
     }
 
     /// Garante o parsing do PIN no corpo do POST de login (form-urlencoded),

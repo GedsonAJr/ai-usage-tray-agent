@@ -65,13 +65,17 @@ fn login_cancel_flag() -> &'static Mutex<Option<Arc<AtomicBool>>> {
 pub fn begin_login() -> Arc<AtomicBool> {
     cancel();
     let flag = Arc::new(AtomicBool::new(false));
-    *login_cancel_flag().lock().unwrap_or_else(|p| p.into_inner()) = Some(flag.clone());
+    *login_cancel_flag()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner()) = Some(flag.clone());
     flag
 }
 
 /// Limpa a flag do login que terminou (se ainda for a atual).
 pub fn end_login(flag: &Arc<AtomicBool>) {
-    let mut slot = login_cancel_flag().lock().unwrap_or_else(|p| p.into_inner());
+    let mut slot = login_cancel_flag()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     if slot.as_ref().map(|f| Arc::ptr_eq(f, flag)).unwrap_or(false) {
         *slot = None;
     }
@@ -79,7 +83,11 @@ pub fn end_login(flag: &Arc<AtomicBool>) {
 
 /// Sinaliza o cancelamento do login pelo navegador em andamento (se houver).
 pub fn cancel() {
-    if let Some(flag) = login_cancel_flag().lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+    if let Some(flag) = login_cancel_flag()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+    {
         flag.store(true, Ordering::SeqCst);
     }
 }
@@ -102,8 +110,15 @@ fn write_stored(path: &Path, auth: &StoredAuth) -> Result<(), String> {
 }
 
 fn has_session(auth: &StoredAuth) -> bool {
-    auth.session_key.as_deref().map(|k| !k.is_empty()).unwrap_or(false)
-        && auth.organization_id.as_deref().map(|o| !o.is_empty()).unwrap_or(false)
+    auth.session_key
+        .as_deref()
+        .map(|k| !k.is_empty())
+        .unwrap_or(false)
+        && auth
+            .organization_id
+            .as_deref()
+            .map(|o| !o.is_empty())
+            .unwrap_or(false)
 }
 
 // ---- Busca do organization_id ------------------------------------------------
@@ -154,9 +169,10 @@ pub fn fetch_chat_organizations(
         .into_iter()
         .filter(|org| org.capabilities.iter().any(|c| c == "chat"))
         .filter_map(|org| {
-            org.uuid
-                .filter(|u| !u.is_empty())
-                .map(|uuid| OrgCandidate { uuid, name: org.name })
+            org.uuid.filter(|u| !u.is_empty()).map(|uuid| OrgCandidate {
+                uuid,
+                name: org.name,
+            })
         })
         .collect();
     Ok(candidates)
@@ -178,7 +194,10 @@ pub fn set_pending_session(session_key: &str) {
 
 /// Consome o `sessionKey` pendente (uma vez), quando o usuario confirma a org.
 pub fn take_pending_session() -> Option<String> {
-    pending_session().lock().unwrap_or_else(|p| p.into_inner()).take()
+    pending_session()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
 }
 
 // ---- API publica usada por lib.rs --------------------------------------------
@@ -216,7 +235,9 @@ fn status_value(auth: &StoredAuth) -> Value {
 pub fn status(config_dir: &Path) -> Value {
     match read_stored(&auth_file(config_dir)) {
         Some(auth) => status_value(&auth),
-        None => json!({ "connected": false, "needsReconnect": false, "email": Value::Null, "organizationId": Value::Null }),
+        None => {
+            json!({ "connected": false, "needsReconnect": false, "email": Value::Null, "organizationId": Value::Null })
+        }
     }
 }
 
@@ -242,7 +263,9 @@ fn find_email(value: &Value) -> Option<String> {
         Value::Object(map) => {
             for (key, val) in map {
                 let key = key.to_lowercase();
-                if (key == "email" || key == "email_address") && val.as_str().map(|s| s.contains('@')).unwrap_or(false) {
+                if (key == "email" || key == "email_address")
+                    && val.as_str().map(|s| s.contains('@')).unwrap_or(false)
+                {
                     return val.as_str().map(str::to_string);
                 }
                 if let Some(found) = find_email(val) {
@@ -259,7 +282,10 @@ fn find_email(value: &Value) -> Option<String> {
 /// Melhor esforco para descobrir o e-mail da conta (so' para exibir "Conectado como
 /// ..."). Nao e' essencial: qualquer falha ou ausencia retorna None.
 pub fn fetch_email(client: &Client, session_key: &str) -> Option<String> {
-    for url in ["https://claude.ai/api/account", "https://claude.ai/api/organizations"] {
+    for url in [
+        "https://claude.ai/api/account",
+        "https://claude.ai/api/organizations",
+    ] {
         let response = match client
             .get(url)
             .header("accept", "*/*")
@@ -294,7 +320,9 @@ pub fn logout(config_dir: &Path) -> Result<(), String> {
 pub fn credentials(config_dir: &Path) -> Result<(String, String), String> {
     let auth = read_stored(&auth_file(config_dir))
         .filter(has_session)
-        .ok_or_else(|| "Claude não conectado. Faça o login pelo navegador nas Configurações.".to_string())?;
+        .ok_or_else(|| {
+            "Claude não conectado. Faça o login pelo navegador nas Configurações.".to_string()
+        })?;
     let session_key = auth.session_key.unwrap_or_default();
     let organization_id = auth.organization_id.unwrap_or_default();
     Ok((cookie_header(&session_key), organization_id))

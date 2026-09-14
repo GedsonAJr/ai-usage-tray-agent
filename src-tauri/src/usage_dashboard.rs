@@ -103,11 +103,17 @@ fn parse_transcript(text: &str) -> FileAgg {
         let proj = o
             .get("cwd")
             .and_then(Value::as_str)
-            .and_then(|c| c.rsplit(|ch: char| ch == '\\' || ch == '/').find(|s| !s.is_empty()))
+            .and_then(|c| {
+                c.rsplit(|ch: char| ch == '\\' || ch == '/')
+                    .find(|s| !s.is_empty())
+            })
             .map(|s| s.to_string());
 
         if let Some(session_id) = o.get("sessionId").and_then(Value::as_str) {
-            let is_sidechain = o.get("isSidechain").and_then(Value::as_bool).unwrap_or(false);
+            let is_sidechain = o
+                .get("isSidechain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if !is_sidechain {
                 first_ts_by_session
                     .entry(session_id.to_string())
@@ -116,7 +122,9 @@ fn parse_transcript(text: &str) -> FileAgg {
         }
 
         let message = o.get("message");
-        let content = message.and_then(|m| m.get("content")).and_then(Value::as_array);
+        let content = message
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array);
 
         if kind == "user" {
             if o.get("isMeta").and_then(Value::as_bool).unwrap_or(false) {
@@ -211,9 +219,18 @@ fn load_baseline(claude_dir: &Path) -> Option<Baseline> {
                 continue;
             };
             let day = days.entry(date.to_string()).or_default();
-            day.msgs = entry.get("messageCount").and_then(Value::as_u64).unwrap_or(0);
-            day.tools = entry.get("toolCallCount").and_then(Value::as_u64).unwrap_or(0);
-            day.sessions = entry.get("sessionCount").and_then(Value::as_u64).unwrap_or(0);
+            day.msgs = entry
+                .get("messageCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            day.tools = entry
+                .get("toolCallCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            day.sessions = entry
+                .get("sessionCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
         }
     }
 
@@ -222,8 +239,14 @@ fn load_baseline(claude_dir: &Path) -> Option<Baseline> {
     let mut ratio_in: HashMap<String, f64> = HashMap::new();
     if let Some(model_usage) = cache.get("modelUsage").and_then(Value::as_object) {
         for (model, usage) in model_usage {
-            let input = usage.get("inputTokens").and_then(Value::as_f64).unwrap_or(0.0);
-            let output = usage.get("outputTokens").and_then(Value::as_f64).unwrap_or(0.0);
+            let input = usage
+                .get("inputTokens")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let output = usage
+                .get("outputTokens")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
             let total = input + output;
             ratio_in.insert(model.clone(), if total > 0.0 { input / total } else { 0.0 });
         }
@@ -257,7 +280,10 @@ fn load_baseline(claude_dir: &Path) -> Option<Baseline> {
     Some(Baseline {
         last_computed_date,
         days,
-        hour_counts: cache.get("hourCounts").cloned().unwrap_or_else(|| json!({})),
+        hour_counts: cache
+            .get("hourCounts")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
     })
 }
 
@@ -274,7 +300,9 @@ pub(crate) fn collect_stats() -> Value {
     {
         // Recupera o lock mesmo se uma coleta anterior tiver panicado segurando-o
         // (poison): senao todo get_stats subsequente passaria a panicar.
-        let mut cache = FILE_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cache = FILE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         for file in &files {
             let Ok(meta) = fs::metadata(file) else {
@@ -318,7 +346,9 @@ pub(crate) fn collect_stats() -> Value {
     let mut session_first_ts: HashMap<String, String> = HashMap::new();
 
     {
-        let cache = FILE_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cache = FILE_CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for entry in cache.values() {
             for (date, src) in &entry.agg.days {
                 if date.as_str() <= cutoff.as_str() {
@@ -438,7 +468,10 @@ mod tests {
         }
 
         println!("files: {}", stats["files"]);
-        println!("sessions: {}", stats["sessions"].as_array().map_or(0, Vec::len));
+        println!(
+            "sessions: {}",
+            stats["sessions"].as_array().map_or(0, Vec::len)
+        );
         let mut models: Vec<_> = by_model.into_iter().collect();
         models.sort_by_key(|(_, (input, out))| std::cmp::Reverse(input + out));
         for (model, (input, out)) in models {
