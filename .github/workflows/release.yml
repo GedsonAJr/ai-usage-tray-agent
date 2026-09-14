@@ -4,6 +4,17 @@ on:
   push:
     branches:
       - main
+  # Disparo manual. Existe para VALIDAR mudancas no proprio workflow: ele so' roda
+  # em push no main do upstream, entao uma alteracao aqui nao tem como ser testada
+  # num PR — o erro apareceria com a release ja' quebrada. Com `ensaio` (o padrao)
+  # compila e empacota os dois sistemas e para antes de publicar, sem mexer na tag
+  # main-latest nem no latest.json que o OTA le.
+  workflow_dispatch:
+    inputs:
+      ensaio:
+        description: "Ensaio: compila e empacota, sem publicar a release"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -33,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -42,7 +53,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -95,7 +106,9 @@ jobs:
 
   release:
     needs: build
-    if: github.repository == 'wzuqui/ai-usage-tray-agent'
+    # O `inputs.ensaio` so' existe no disparo manual; num push ele e' vazio, que e'
+    # falso, entao o caminho normal da release segue intocado.
+    if: github.repository == 'wzuqui/ai-usage-tray-agent' && !inputs.ensaio
     runs-on: ubuntu-latest
 
     steps:
