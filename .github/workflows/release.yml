@@ -16,6 +16,18 @@ on:
         type: boolean
         default: true
 
+# Releases NAO podem correr em paralelo. Elas disputam a mesma tag rolante
+# main-latest, e o job de publicacao APAGA os assets antes de subir os novos: com
+# duas em voo, a mais lenta termina depois e deixa o latest.json apontando para a
+# versao mais ANTIGA — os apps instalados ficam presos nela ate' a release seguinte.
+#
+# O `cancel-in-progress: false` e' deliberado. Cancelar seria PIOR que a corrida: uma
+# release interrompida pode ja' ter passado pela limpeza sem chegar a publicar, e
+# ai' o manifesto some. Enfileirar garante que cada uma complete o ciclo.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
