@@ -32,6 +32,9 @@ e as armadilhas técnicas já aprendidas. Para arquitetura e telas, veja o
 
 - **Comandos Tauri que abrem/criam uma `WebviewWindow` DEVEM ser `async fn`** — um
   comando síncrono trava o event loop e a janela abre em branco.
+- **No Windows, nunca passe JSON com aspas na linha de comando do `claude`** — o shim
+  `claude.cmd` do npm corrompe o argumento (`{"effortLevel":"low"}` vira
+  `{"effortLevel:low}` colado no próximo). Use caminho de arquivo, que passa intacto.
 - **API de uso do Codex**: dados vêm de `chatgpt.com/backend-api/wham/...` com o
   token do `~/.codex/auth.json`; releia o `auth.json` a cada coleta (o token
   expira). O namespace `wham/` funciona; `codex/...` dá 403.

@@ -186,6 +186,17 @@ primeiro formate o que existe.
   é aposentada; até um alias é nome de terceiro). Se precisar controlá-lo, vire campo nas
   Configurações com queda segura para o padrão do CLI.
 
+- **Nada de JSON com aspas na linha de comando do `claude` no Windows.** Lá o CLI quase
+  sempre é o shim `claude.cmd` do npm, e o `cmd.exe` no meio do caminho corrompe qualquer
+  argumento com aspas: `{"effortLevel":"low"}` chegou do outro lado como
+  `{"effortLevel:low}` **colado no argumento seguinte**, e toda reabertura automática
+  morria com `Error: Settings file not found: ...`. O escape do Rust não tem culpa — o
+  mesmo argumento passa intacto quando o alvo é o `claude.exe` direto. A saída é passar
+  **caminho de arquivo** no `--settings` (grafado a cada disparo em
+  `<config>/sessao-auto/settings-disparo.json`): caminho atravessa o shim intacto, com
+  espaços e tudo. O teste `opener_passa_os_ajustes_como_arquivo_e_nao_como_json_inline`
+  trava isso com um `.cmd` falso.
+
 ## 7. Disciplina de documentação
 
 Antes de **qualquer** commit, faça uma passada de consistência e inclua as mudanças de doc
