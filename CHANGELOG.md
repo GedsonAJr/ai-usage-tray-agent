@@ -29,6 +29,9 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Corrigido
+- Claude: a reabertura automática da sessão voltou a funcionar no Windows — desde a versão anterior todo disparo falhava com "Settings file not found" e a janela de 5h nunca chegava a ser aberta.
+
 ## [0.2.55] - 2026-09-14
 
 ### Adicionado

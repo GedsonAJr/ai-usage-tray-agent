@@ -427,7 +427,17 @@ const SESSAO_AUTO_MENSAGEM: &str = "Oi";
 ///
 /// O modelo NAO e' fixado de proposito: um nome cravado aqui (ainda que um alias)
 /// e' uma escolha do app sobre algo que e' do usuario, e sai do ar sem aviso.
+///
+/// Vai para o CLI como **arquivo**, nunca como JSON na linha de comando: no
+/// Windows o `claude` costuma ser o shim `claude.cmd` do npm, e um argumento com
+/// aspas atravessa o `cmd.exe` corrompido — `{"effortLevel":"low"}` chega como
+/// `{"effortLevel:low}` colado no argumento seguinte, e o disparo morre com
+/// "Settings file not found". Caminho de arquivo passa intacto pelo shim, com
+/// espacos e tudo. Ver `escreve_settings_do_disparo`.
 const SESSAO_AUTO_SETTINGS: &str = r#"{"effortLevel":"low"}"#;
+
+/// Nome do arquivo gravado a cada disparo com o `SESSAO_AUTO_SETTINGS`.
+const SESSAO_AUTO_SETTINGS_ARQUIVO: &str = "settings-disparo.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UsageMetric {
@@ -2060,6 +2070,23 @@ fn sessao_auto_slot_devido(
         .max()
 }
 
+/// Grava o `SESSAO_AUTO_SETTINGS` em `<workdir>/settings-disparo.json` e devolve o
+/// caminho, que e' o que vai no `--settings`.
+///
+/// Reescrito a cada disparo de proposito: o arquivo e' derivado da constante, e
+/// nao um estado que o usuario edita — se ele sumir ou for alterado, o proximo
+/// disparo o coloca de volta no lugar certo.
+fn escreve_settings_do_disparo(workdir: &Path) -> Result<PathBuf, String> {
+    let destino = workdir.join(SESSAO_AUTO_SETTINGS_ARQUIVO);
+    fs::write(&destino, SESSAO_AUTO_SETTINGS).map_err(|error| {
+        format!(
+            "nao foi possivel gravar os ajustes do disparo em {}: {error}",
+            destino.display()
+        )
+    })?;
+    Ok(destino)
+}
+
 /// Executa `claude -p "<mensagem>"` e devolve `Ok(())` se o CLI saiu com sucesso.
 ///
 /// Detalhes que importam:
@@ -2068,10 +2095,11 @@ fn sessao_auto_slot_devido(
 /// - remove `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` do processo filho — com uma
 ///   delas setada o CLI iria para a API paga, que e' outro pool e **nao** abre a
 ///   janela da assinatura;
-/// - rebaixa o esforco de raciocinio (ver `SESSAO_AUTO_SETTINGS`) e corta os
-///   servidores MCP: sao os dois lados da conta de um disparo que so' precisa
-///   existir — o raciocinio infla a saida, e as definicoes de ferramenta de cada
-///   servidor MCP incham o prompt de sistema;
+/// - rebaixa o esforco de raciocinio (ver `SESSAO_AUTO_SETTINGS`, entregue como
+///   arquivo porque o shim `claude.cmd` do Windows corrompe JSON na linha de
+///   comando) e corta os servidores MCP: sao os dois lados da conta de um disparo
+///   que so' precisa existir — o raciocinio infla a saida, e as definicoes de
+///   ferramenta de cada servidor MCP incham o prompt de sistema;
 /// - stdin fechado (o CLI nunca fica esperando digitacao); stdout e stderr sao
 ///   capturados e, na falha, viram o detalhe do erro (ver `erro_do_cli`) — no
 ///   sucesso o texto e' descartado;
@@ -2088,13 +2116,14 @@ fn run_claude_session_opener(
     // "AiUsageTrayAgent" que ninguem liga ao recurso.
     let workdir = paths.config_dir.join("sessao-auto");
     let _ = fs::create_dir_all(&workdir);
+    let settings = escreve_settings_do_disparo(&workdir)?;
 
     let mut command = Command::new(&exe);
     command
         .arg("-p")
         .arg(SESSAO_AUTO_MENSAGEM)
         .arg("--settings")
-        .arg(SESSAO_AUTO_SETTINGS)
+        .arg(&settings)
         // Sem nenhum `--mcp-config` junto, isto significa NENHUM servidor MCP: as
         // definicoes de ferramenta deles entrariam inteiras no prompt de sistema,
         // e o disparo nao usa ferramenta alguma.
@@ -4067,6 +4096,53 @@ mod tests {
         let erro = run_claude_session_opener(&paths, &config).expect_err("o CLI falso sai com 1");
         assert!(erro.contains("Not logged in"), "erro sem o detalhe: {erro}");
         assert!(erro.contains("exit code: 1"), "erro sem o status: {erro}");
+    }
+
+    /// Regressao: o `--settings` tem de chegar como **caminho de arquivo**. Com o
+    /// JSON inline, o shim `claude.cmd` do npm entregava `{"effortLevel:low}`
+    /// colado no argumento seguinte e todo disparo morria com "Settings file not
+    /// found". O CLI falso aqui e' um `.cmd` justamente por isso.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn opener_passa_os_ajustes_como_arquivo_e_nao_como_json_inline() {
+        let base = std::env::temp_dir().join("ai-usage-tray-agent-teste-settings");
+        fs::create_dir_all(&base).expect("criar a pasta do teste");
+        let falso = base.join("claude-falso.cmd");
+        // %4 e' o valor do `--settings` (%1=-p %2=<mensagem> %3=--settings).
+        fs::write(
+            &falso,
+            "@echo off
+echo settings=%4
+exit /b 1
+",
+        )
+        .expect("gravar o CLI falso");
+
+        let paths = RuntimePaths {
+            config_dir: base.clone(),
+            config_file: base.join("config.json"),
+            logs_dir: base.join("logs"),
+        };
+        let config = SessaoAutoConfig {
+            habilitado: true,
+            caminho_cli: falso.to_string_lossy().into_owned(),
+            ..SessaoAutoConfig::default()
+        };
+
+        let erro = run_claude_session_opener(&paths, &config).expect_err("o CLI falso sai com 1");
+        assert!(
+            erro.contains(SESSAO_AUTO_SETTINGS_ARQUIVO),
+            "o CLI nao recebeu o caminho do arquivo: {erro}"
+        );
+        assert!(
+            !erro.contains("effortLevel"),
+            "o JSON foi parar na linha de comando: {erro}"
+        );
+
+        let gravado =
+            fs::read_to_string(base.join("sessao-auto").join(SESSAO_AUTO_SETTINGS_ARQUIVO))
+                .expect("ler os ajustes gravados");
+        assert_eq!(gravado, SESSAO_AUTO_SETTINGS);
     }
 
     /// O detalhe nao pode parar na UI: e' no log do app que o usuario (ou quem
