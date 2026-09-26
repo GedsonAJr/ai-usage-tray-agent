@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window, the desktop widget and the update window",
-  "windows": ["main", "widget", "update"],
+  "description": "Capability for the main window, the desktop widget, the update window and the Claude login window (only its local org picker page gets IPC; claude.ai is a remote origin)",
+  "windows": ["main", "widget", "update", "claude-login"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

@@ -544,7 +544,7 @@ pub fn logout(config_dir: &Path) -> Result<(), String> {
 pub fn ensure_fresh(client: &Client, config_dir: &Path) -> Result<PathBuf, String> {
     let path = auth_file(config_dir);
     let mut auth = read_stored(&path).filter(has_access_token).ok_or_else(|| {
-        "Codex não autenticado. Verifique a autenticação em Configurações → Codex.".to_string()
+        "Codex não conectado. Faça o login pelo navegador nas Configurações.".to_string()
     })?;
 
     let needs_refresh = match auth.expires_at {

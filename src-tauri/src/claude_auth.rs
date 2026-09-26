@@ -1,5 +1,5 @@
-// Login do Claude pelo navegador, alternativa ao preenchimento manual de
-// `organizationId` + `cookie`. Diferente do Codex (que tem OAuth/PKCE publico), a
+// Login do Claude pelo navegador (unica forma de autenticacao do Claude).
+// Diferente do Codex (que tem OAuth/PKCE publico), a
 // claude.ai autentica por COOKIE de sessao web (`sessionKey`, httpOnly). Entao o
 // fluxo aqui e' outro: abrimos um webview do Tauri em `claude.ai/login`, o usuario
 // entra normalmente e o app captura o cookie `sessionKey` do webview (via
@@ -180,21 +180,37 @@ pub fn fetch_chat_organizations(
 
 // ---- Sessao pendente entre login e escolha da org ----------------------------
 
-/// Guarda o `sessionKey` capturado enquanto o usuario escolhe a org (quando a conta
-/// tem mais de uma com "chat"). So' fica preenchido nesse intervalo curto.
-fn pending_session() -> &'static Mutex<Option<String>> {
-    static PENDING: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// Login capturado aguardando a escolha da org (conta com mais de uma com "chat"):
+/// o `sessionKey` e as orgs candidatas. So' fica preenchido nesse intervalo curto,
+/// enquanto a janela de login mostra a pagina de escolha (`claude-org.html`).
+#[derive(Debug, Clone)]
+pub struct PendingLogin {
+    pub session_key: String,
+    pub orgs: Vec<OrgCandidate>,
+}
+
+fn pending_login() -> &'static Mutex<Option<PendingLogin>> {
+    static PENDING: OnceLock<Mutex<Option<PendingLogin>>> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(None))
 }
 
-/// Registra o `sessionKey` capturado, aguardando a escolha da org pelo usuario.
-pub fn set_pending_session(session_key: &str) {
-    *pending_session().lock().unwrap_or_else(|p| p.into_inner()) = Some(session_key.to_string());
+/// Registra o login capturado, aguardando a escolha da org pelo usuario.
+pub fn set_pending_login(pending: PendingLogin) {
+    *pending_login().lock().unwrap_or_else(|p| p.into_inner()) = Some(pending);
 }
 
-/// Consome o `sessionKey` pendente (uma vez), quando o usuario confirma a org.
-pub fn take_pending_session() -> Option<String> {
-    pending_session()
+/// Le' o login pendente sem consumi-lo (a pagina de escolha lista as orgs).
+pub fn peek_pending_login() -> Option<PendingLogin> {
+    pending_login()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+/// Consome o login pendente (uma vez): ao confirmar a org, ou ao descartar quando o
+/// usuario fecha a janela sem escolher.
+pub fn take_pending_login() -> Option<PendingLogin> {
+    pending_login()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .take()
