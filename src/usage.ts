@@ -1,6 +1,6 @@
-// Tela "Uso atual": mostra o uso de sessão (5h) e semanal (7d) do Claude e do
-// Codex, com barra de progresso, tempo restante para o reset (contagem ao vivo)
-// e a data/hora exata do reset. O subtítulo da página traz o "Atualizado há…" do
+// Tela "Uso atual": mostra o uso de sessão (5h) e semanal (7d) de cada conta do
+// Claude e do Codex (um card por conta), com barra de progresso, tempo restante
+// para o reset (contagem ao vivo) e a data/hora exata do reset. O subtítulo da página traz o "Atualizado há…" do
 // dado em cache. Os dados vêm do comando IPC `get_usage`, que lê o mesmo snapshot
 // usado pelo tray e pela barra de tarefas (sem rede); a tela rebusca sozinha a
 // cada poucos segundos (não há mais botão de atualização manual).
@@ -15,7 +15,6 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
-  type ProviderUsage,
   type UsageMetric,
 } from "./usage-format";
 
@@ -24,11 +23,25 @@ interface HistPoint {
   t: string;
   pct: number;
 }
-/// Séries de histórico de um provedor: sessão (5h) e semanal (7d). Ambas cobrem
-/// as últimas ~5h (o backend só mantém essa janela, em memória).
+/// Séries de histórico de uma conta: sessão (5h) e semanal (7d). Ambas cobrem as
+/// últimas ~5h (o backend só mantém essa janela, em memória).
 interface ProviderHistory {
   session: HistPoint[];
   weekly: HistPoint[];
+}
+
+/// Um card: uma conta conectada, ou o provedor sem conta (chave = a do provedor),
+/// que mostra "não conectado"/"desabilitado" como antes.
+interface ContaUso {
+  /// "<provedor>:<id>" (ou só "<provedor>" no card do provedor sem conta).
+  chave: string;
+  provedor: "claude" | "codex";
+  /// Apelido, senão o e-mail. Nulo no card do provedor sem conta.
+  rotulo: string | null;
+  principal: boolean;
+  habilitado: boolean;
+  metric: UsageMetric | null;
+  history: ProviderHistory;
 }
 
 interface Usage {
@@ -38,11 +51,8 @@ interface Usage {
   chartEnabled?: boolean;
   /// Mostrar o aviso de perda de dados ao desabilitar. Ausente = tratar como true.
   chartWarnOnDisable?: boolean;
-  /// Ordem de exibição dos provedores (chaves). Ausente = ordem canônica.
-  ordem?: string[];
-  claude: ProviderUsage;
-  codex: ProviderUsage;
-  history?: { claude: ProviderHistory; codex: ProviderHistory };
+  /// Cards já na ordem de exibição (a ordem salva vem aplicada pelo backend).
+  contas: ContaUso[];
 }
 
 let DATA: Usage | null = null;
@@ -180,17 +190,24 @@ function sparkline(series: HistPoint[], accent: string, key: string, label: stri
   </div>`;
 }
 
-/// Card de um provider, cobrindo os estados: desabilitado, sem dado ainda, erro
-/// de coleta, ou as duas janelas (sessão e semanal). O ícone do cabeçalho é o do
-/// provedor (Claude = spark; Codex = logo do Codex).
-function renderProvider(label: string, provKey: "claude" | "codex", prov: ProviderUsage): string {
-  const icon = label === "Codex" ? iconCodex() : ICON_CLAUDE;
+const NOMES: Record<ContaUso["provedor"], string> = { claude: "Claude", codex: "Codex" };
+
+/// Card de uma conta, cobrindo os estados: desabilitado, sem dado ainda, erro de
+/// coleta, ou as duas janelas (sessão e semanal). O ícone do cabeçalho é o do
+/// provedor (Claude = spark; Codex = logo do Codex). `mostraRotulo`: o provedor
+/// tem mais de um card, então o nome sozinho não diz de qual conta é.
+function renderProvider(prov: ContaUso, mostraRotulo: boolean): string {
+  const label = NOMES[prov.provedor];
+  const icon = prov.provedor === "codex" ? iconCodex() : ICON_CLAUDE;
+  const rotulo = mostraRotulo && prov.rotulo
+    ? ` <span class="uprov-conta">${escapeHtml(prov.rotulo)}</span>`
+    : "";
   // No modo reordenar, o card fica arrastável e ganha uma alça no cabeçalho.
   const grip = reordering ? '<span class="uprov-grip" aria-hidden="true">⠿</span>' : "";
   const open = (cls: string): string =>
-    `<div class="${cls}" data-prov="${provKey}"${reordering ? ' draggable="true"' : ""}>`;
+    `<div class="${cls}" data-conta="${escapeHtml(prov.chave)}"${reordering ? ' draggable="true"' : ""}>`;
   const head = (meta: string): string =>
-    `<div class="uprov-head"><div class="uprov-name">${grip}${icon} ${label}</div><div class="uprov-meta">${meta}</div></div>`;
+    `<div class="uprov-head"><div class="uprov-name">${grip}${icon} ${label}${rotulo}</div><div class="uprov-meta">${meta}</div></div>`;
 
   if (!prov.habilitado) {
     return `${open("uprov disabled")}${head('<span class="ubadge muted">desabilitado</span>')}
@@ -205,14 +222,15 @@ function renderProvider(label: string, provKey: "claude" | "codex", prov: Provid
       <div class="uprov-note err">${escapeHtml(m.erro ?? "Falha na coleta.")}</div></div>`;
   }
   // O "atualizado há…" foi para o subtítulo da página (renderSub); o card não o repete.
-  const hist = DATA?.history?.[provKey];
+  const hist = prov.history;
+  const chartKey = prov.chave;
   const hasSession = m.uso_percentual !== undefined && m.uso_percentual !== null;
   const hasWeekly = m.uso_percentual_7d !== undefined && m.uso_percentual_7d !== null;
   // Só uma janela com dado (ex.: o Codex deixou de expor a sessão): o bloco vazio
   // some e o que tem dado ocupa o card inteiro. Sem nenhuma, mantém os dois "—".
   const single = hasSession !== hasWeekly;
-  const session = windowBlock("Sessão", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session", single);
-  const weekly = windowBlock("Semanal", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly", single);
+  const session = windowBlock("Sessão", m.uso_percentual, m.reset_em, true, hist?.session ?? [], chartKey + "-session", single);
+  const weekly = windowBlock("Semanal", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], chartKey + "-weekly", single);
   const wins = !single ? session + weekly : hasSession ? session : weekly;
   return `${open("uprov")}${head("")}
     <div class="uwins${single ? " single" : ""}">
@@ -221,24 +239,13 @@ function renderProvider(label: string, provKey: "claude" | "codex", prov: Provid
   </div>`;
 }
 
-const PROVIDER_KEYS = ["claude", "codex"] as const;
-type ProviderKey = (typeof PROVIDER_KEYS)[number];
-
-/// Ordem dos provedores vinda do backend, saneada para conter exatamente as chaves
-/// conhecidas (fallback à ordem canônica). Espelha `normalize_provider_order`.
-function providerOrder(d: Usage): ProviderKey[] {
-  const from = (d.ordem ?? []).filter((k): k is ProviderKey => (PROVIDER_KEYS as readonly string[]).includes(k));
-  for (const k of PROVIDER_KEYS) if (!from.includes(k)) from.push(k);
-  return from;
-}
-
-/// Timestamp de coleta mais recente entre os provedores habilitados com dado
-/// válido (ambos coletam no mesmo ciclo, então normalmente coincidem). `null`
-/// quando nenhum provedor tem dado coletado ainda.
+/// Timestamp de coleta mais recente entre as contas habilitadas com dado válido
+/// (todas coletam no mesmo ciclo, então normalmente coincidem). `null` quando
+/// nenhuma conta tem dado coletado ainda.
 function freshestCollected(): string | null {
   if (!DATA) return null;
   let best: string | null = null;
-  for (const prov of [DATA.claude, DATA.codex]) {
+  for (const prov of DATA.contas) {
     const m = prov.metric;
     if (!prov.habilitado || !m || m.status === "erro" || m.erro || !m.coletado_em) continue;
     if (best === null || new Date(m.coletado_em).getTime() > new Date(best).getTime()) {
@@ -269,17 +276,16 @@ function tick(): void {
 }
 
 /// Assinatura barata do snapshot para decidir se vale reconstruir os cards.
-/// Cobre o que muda o desenho: pausa, habilitado, métricas de cada provedor e o
-/// tamanho/última amostra de cada série do histórico.
+/// Cobre o que muda o desenho: pausa, a ordem e o rótulo dos cards, habilitado,
+/// a métrica de cada conta e o tamanho/última amostra de cada série do histórico.
 function signature(d: Usage): string {
   const m = (x: UsageMetric | null): string =>
     x ? `${x.coletado_em}|${x.uso_percentual ?? ""}|${x.uso_percentual_7d ?? ""}|${x.status}|${x.erro ?? ""}` : "none";
   const h = (s?: HistPoint[]): string => (s && s.length ? `${s.length}:${s[s.length - 1].t}` : "0");
-  const hi = d.history;
   return [
-    d.paused, d.chartEnabled !== false, reordering, providerOrder(d).join(","),
-    d.claude.habilitado, m(d.claude.metric), d.codex.habilitado, m(d.codex.metric),
-    h(hi?.claude.session), h(hi?.claude.weekly), h(hi?.codex.session), h(hi?.codex.weekly),
+    d.paused, d.chartEnabled !== false, reordering,
+    ...d.contas.map((c) =>
+      [c.chave, c.rotulo ?? "", c.habilitado, m(c.metric), h(c.history?.session), h(c.history?.weekly)].join("|")),
   ].join("~");
 }
 
@@ -359,10 +365,10 @@ function render(): void {
     ? '<div class="ubanner">⏸ Envio ao Loki pausado. Os dados continuam sendo coletados e exibidos aqui; retome o envio na tela "Envio de dados" ou no menu do tray.</div>'
     : "";
   CHARTS.clear();
-  const labels: Record<ProviderKey, string> = { claude: "Claude", codex: "Codex" };
   el("usage-cards").classList.toggle("reordering", reordering);
-  el("usage-cards").innerHTML = providerOrder(DATA)
-    .map((k) => renderProvider(labels[k], k, (DATA as Usage)[k]))
+  const contas = DATA.contas;
+  el("usage-cards").innerHTML = contas
+    .map((c) => renderProvider(c, contas.filter((o) => o.provedor === c.provedor).length > 1))
     .join("");
   renderSub();
   el("usage-foot").textContent = "";
@@ -479,7 +485,7 @@ function bindReorder(): void {
     if (!reordering) return;
     const card = cardAt(e);
     if (!card) return;
-    draggedKey = card.dataset.prov ?? null;
+    draggedKey = card.dataset.conta ?? null;
     card.classList.add("dragging");
     (e as DragEvent).dataTransfer?.setData("text/plain", draggedKey ?? "");
   });
@@ -488,13 +494,13 @@ function bindReorder(): void {
     e.preventDefault(); // habilita o drop
     const card = cardAt(e);
     cards.querySelectorAll(".uprov.drop-target").forEach((n) => n.classList.remove("drop-target"));
-    if (card && card.dataset.prov !== draggedKey) card.classList.add("drop-target");
+    if (card && card.dataset.conta !== draggedKey) card.classList.add("drop-target");
   });
   cards.addEventListener("dragend", clearMarks);
   cards.addEventListener("drop", (e) => {
     if (!reordering || !draggedKey || !DATA) return;
     e.preventDefault();
-    const targetKey = cardAt(e)?.dataset.prov;
+    const targetKey = cardAt(e)?.dataset.conta;
     const dragged = draggedKey;
     draggedKey = null;
     clearMarks();
@@ -502,7 +508,7 @@ function bindReorder(): void {
     // Move o arrastado para a posição do alvo, usando os índices da ordem ORIGINAL
     // (remove na origem e insere no índice do alvo). Para 2 itens vira uma troca;
     // para N, uma reordenação correta nos dois sentidos.
-    const order: string[] = providerOrder(DATA);
+    const order: string[] = DATA.contas.map((c) => c.chave);
     const from = order.indexOf(dragged);
     const to = order.indexOf(targetKey);
     if (from < 0 || to < 0 || from === to) return;
@@ -515,7 +521,7 @@ function bindReorder(): void {
 /// Persiste a nova ordem no backend e re-renderiza.
 async function applyOrder(order: string[]): Promise<void> {
   try {
-    DATA = await invoke<Usage>("set_providers_order", { order });
+    DATA = await invoke<Usage>("set_contas_ordem", { order });
     lastSig = "";
     render();
   } catch (err) {

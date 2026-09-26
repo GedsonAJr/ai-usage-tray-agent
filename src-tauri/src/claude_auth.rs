@@ -7,9 +7,11 @@
 // depender do webview, vive em `lib.rs` (`claude_login`).
 //
 // Aqui ficam as partes SEM Tauri: buscar o `organization_id` (com o cookie
-// capturado, GET `claude.ai/api/organizations`), gravar/ler o arquivo gerenciado
-// (`claude-auth.json` no config_dir), montar o header de cookie para a coleta,
-// status/logout e a flag de cancelamento do login.
+// capturado, GET `claude.ai/api/organizations`), gravar/ler o arquivo de
+// credenciais de uma conta, montar o header de cookie para a coleta, status e a
+// flag de cancelamento do login. Cada conta tem o seu arquivo: a principal em
+// `claude-auth.json` no config_dir, as extras em `contas/claude/` (ver `contas.rs`).
+// Por isso as funcoes recebem o caminho do arquivo da conta, nao o config_dir.
 //
 // Limitacao herdada do modelo de sessao web: o `sessionKey` expira e NAO ha
 // refresh_token — quando expira (a coleta passa a dar 401/403) o usuario precisa
@@ -43,7 +45,8 @@ struct StoredAuth {
     needs_reconnect: Option<bool>,
 }
 
-/// Caminho do arquivo gerenciado de credenciais do Claude (login pelo navegador).
+/// Arquivo legado de credenciais do Claude, que guarda a conta principal (e e' o
+/// unico que versoes anteriores do app conhecem).
 pub fn auth_file(config_dir: &Path) -> PathBuf {
     config_dir.join("claude-auth.json")
 }
@@ -100,13 +103,8 @@ fn read_stored(path: &Path) -> Option<StoredAuth> {
 }
 
 fn write_stored(path: &Path, auth: &StoredAuth) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Falha ao criar diretório de credenciais: {error}"))?;
-    }
     let payload = serde_json::to_string_pretty(auth).map_err(|error| error.to_string())?;
-    std::fs::write(path, format!("{payload}\n"))
-        .map_err(|error| format!("Falha ao gravar claude-auth.json: {error}"))
+    crate::contas::gravar_atomico(path, &format!("{payload}\n"))
 }
 
 fn has_session(auth: &StoredAuth) -> bool {
@@ -218,9 +216,31 @@ pub fn take_pending_login() -> Option<PendingLogin> {
 
 // ---- API publica usada por lib.rs --------------------------------------------
 
-/// Grava as credenciais capturadas (sessionKey + org) e devolve o status.
+/// Identidade de uma conta (base do id dela em `contas`): org + e-mail. A coleta e'
+/// por org e a mesma pessoa pode estar em mais de uma; o e-mail separa pessoas
+/// diferentes na mesma org de time. Normalizada para que a mesma conta, reconectada,
+/// caia na mesma chave.
+pub fn identity_of(organization_id: &str, email: Option<&str>) -> String {
+    format!(
+        "{}|{}",
+        organization_id.trim(),
+        email.unwrap_or("").trim().to_lowercase()
+    )
+}
+
+/// Identidade e e-mail da conta gravada em `path`, ou `None` se nao ha' login valido.
+pub fn identity(path: &Path) -> Option<(String, Option<String>)> {
+    let auth = read_stored(path).filter(has_session)?;
+    let identity = identity_of(
+        auth.organization_id.as_deref().unwrap_or(""),
+        auth.email.as_deref(),
+    );
+    Some((identity, auth.email))
+}
+
+/// Grava as credenciais capturadas (sessionKey + org) em `path` e devolve o status.
 pub fn store(
-    config_dir: &Path,
+    path: &Path,
     session_key: &str,
     organization_id: &str,
     email: Option<String>,
@@ -232,7 +252,7 @@ pub fn store(
         captured_at: Some(Utc::now().to_rfc3339()),
         needs_reconnect: Some(false),
     };
-    write_stored(&auth_file(config_dir), &auth)?;
+    write_stored(path, &auth)?;
     Ok(status_value(&auth))
 }
 
@@ -247,9 +267,9 @@ fn status_value(auth: &StoredAuth) -> Value {
     })
 }
 
-/// Status do login pelo navegador do Claude (sem rede).
-pub fn status(config_dir: &Path) -> Value {
-    match read_stored(&auth_file(config_dir)) {
+/// Status do login da conta gravada em `path` (sem rede).
+pub fn status(path: &Path) -> Value {
+    match read_stored(path) {
         Some(auth) => status_value(&auth),
         None => {
             json!({ "connected": false, "needsReconnect": false, "email": Value::Null, "organizationId": Value::Null })
@@ -260,16 +280,15 @@ pub fn status(config_dir: &Path) -> Value {
 /// Marca (ou limpa) que a sessao precisa de reconexao — chamada pela coleta ao
 /// receber 401/403 (marca) ou sucesso (limpa). So' grava quando o valor muda, para
 /// nao reescrever o arquivo a cada ciclo de coleta.
-pub fn set_needs_reconnect(config_dir: &Path, value: bool) {
-    let path = auth_file(config_dir);
-    let Some(mut auth) = read_stored(&path) else {
+pub fn set_needs_reconnect(path: &Path, value: bool) {
+    let Some(mut auth) = read_stored(path) else {
         return;
     };
     if auth.needs_reconnect.unwrap_or(false) == value {
         return;
     }
     auth.needs_reconnect = Some(value);
-    let _ = write_stored(&path, &auth);
+    let _ = write_stored(path, &auth);
 }
 
 /// Procura recursivamente um campo de e-mail (`email`/`email_address`) na resposta
@@ -322,23 +341,12 @@ pub fn fetch_email(client: &Client, session_key: &str) -> Option<String> {
     None
 }
 
-/// Remove as credenciais do login pelo navegador ("Desconectar"). Idempotente.
-pub fn logout(config_dir: &Path) -> Result<(), String> {
-    match std::fs::remove_file(auth_file(config_dir)) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Falha ao remover claude-auth.json: {error}")),
-    }
-}
-
-/// Credenciais para a coleta no modo "navegador": (header de cookie, organization_id).
-/// Erro se nao ha login salvo.
-pub fn credentials(config_dir: &Path) -> Result<(String, String), String> {
-    let auth = read_stored(&auth_file(config_dir))
-        .filter(has_session)
-        .ok_or_else(|| {
-            "Claude não conectado. Faça o login pelo navegador nas Configurações.".to_string()
-        })?;
+/// Credenciais da conta gravada em `path` para a coleta: (header de cookie,
+/// organization_id). Erro se nao ha login salvo.
+pub fn credentials(path: &Path) -> Result<(String, String), String> {
+    let auth = read_stored(path).filter(has_session).ok_or_else(|| {
+        "Claude não conectado. Faça o login pelo navegador nas Configurações.".to_string()
+    })?;
     let session_key = auth.session_key.unwrap_or_default();
     let organization_id = auth.organization_id.unwrap_or_default();
     Ok((cookie_header(&session_key), organization_id))

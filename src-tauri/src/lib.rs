@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, File, OpenOptions},
     io::{BufRead, Write},
@@ -15,6 +16,7 @@ use std::{
 mod claude_auth;
 mod codex_auth;
 mod codex_dashboard;
+mod contas;
 mod http_server;
 mod usage_dashboard;
 
@@ -33,6 +35,8 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+
+use contas::Provedor;
 
 const TRAY_ID: &str = "main-tray";
 const APP_NAME_WINDOWS: &str = "AiUsageTrayAgent";
@@ -457,8 +461,14 @@ struct RuntimeSnapshot {
     paused: bool,
     last_error: Option<String>,
     last_successful_send_at: Option<String>,
-    codex_metric: Option<UsageMetric>,
-    claude_metric: Option<UsageMetric>,
+    /// Ultima metrica de cada conta, pela chave `"<provedor>:<id>"`. Um provedor
+    /// habilitado sem conta conectada aparece com a chave do provedor (`"claude"`),
+    /// carregando o erro "nao conectado" — o mesmo card de antes.
+    metrics: BTreeMap<String, UsageMetric>,
+    /// Chave da conta principal de cada provedor (pela chave do provedor), definida
+    /// no ultimo ciclo. As telas que ainda mostram uma conta por provedor (tray,
+    /// barra, widget) e o envio ao Loki usam a principal.
+    principais: BTreeMap<String, String>,
     /// Historico curto dos ultimos envios (anel), exibido na tela "Envio de dados"
     /// em tempo (quase) real. Mais novos no fim; limitado a `SEND_LOG_MAX`.
     send_log: Vec<SendLogEntry>,
@@ -466,6 +476,15 @@ struct RuntimeSnapshot {
     /// de linha da tela "Uso atual". Mais novas no fim; podadas para as ultimas
     /// `USAGE_HISTORY_WINDOW_SECS`. So' vive enquanto o app roda (sem disco).
     usage_history: Vec<UsageSample>,
+}
+
+impl RuntimeSnapshot {
+    /// Metrica da conta principal do provedor (`"claude"`/`"codex"`).
+    fn principal_metric(&self, provedor: &str) -> Option<&UsageMetric> {
+        self.principais
+            .get(provedor)
+            .and_then(|chave| self.metrics.get(chave))
+    }
 }
 
 /// Uma entrada do historico de envios: quando, qual ferramenta e o resultado.
@@ -490,17 +509,14 @@ struct SendLogEntry {
 const SEND_LOG_MAX: usize = 50;
 
 /// Uma amostra do uso num instante, para os mini-graficos de linha da tela "Uso
-/// atual". Cada campo e' a % daquela janela (sessao 5h / semanal 7d) de cada
-/// provedor, ou `None` quando o provedor estava desabilitado/com erro naquele
-/// momento (a UI trata `None` como "sem ponto").
+/// atual": a % de cada janela (sessao 5h, semanal 7d) de cada conta, pela chave da
+/// conta. `None` numa janela (ou a conta ausente) = sem dado naquele momento
+/// (desabilitada/com erro); a UI trata como "sem ponto".
 #[derive(Debug, Clone, Serialize)]
 struct UsageSample {
     /// ISO-8601 (RFC 3339) em UTC do momento da coleta.
     t: String,
-    claude_5h: Option<f64>,
-    claude_7d: Option<f64>,
-    codex_5h: Option<f64>,
-    codex_7d: Option<f64>,
+    valores: BTreeMap<String, (Option<f64>, Option<f64>)>,
 }
 
 /// Janela do historico dos mini-graficos: ultimas 5 horas (a mesma janela da
@@ -719,7 +735,7 @@ pub fn run() {
             set_envio_provider,
             clear_send_log,
             set_usage_chart,
-            set_providers_order,
+            set_contas_ordem,
             check_updates_now,
             get_pending_update,
             install_update,
@@ -729,14 +745,15 @@ pub fn run() {
             open_external,
             codex_login,
             codex_auth_status,
-            codex_logout,
             codex_login_cancel,
             claude_login,
             claude_auth_status,
-            claude_logout,
             claude_login_cancel,
             claude_login_orgs,
-            claude_select_org
+            claude_select_org,
+            remover_conta,
+            set_conta_apelido,
+            set_conta_principal
         ])
         .setup(|app| {
             // Janela unica do app (Dashboard + Configuracoes) e' criada sob demanda
@@ -935,60 +952,127 @@ fn save_settings(
     Ok(settings_value(&app, paths.inner()))
 }
 
-/// Estado de uso exposto a' tela "Uso atual": as metricas atuais de cada
-/// provider (a mesma fonte do tray e da barra de tarefas), mais se cada um esta'
-/// habilitado e se a coleta esta' pausada. Nao faz rede: le' apenas o snapshot
-/// ja' coletado pelo worker.
+fn provedor_habilitado(config: &AppConfig, provedor: Provedor) -> bool {
+    match provedor {
+        Provedor::Claude => config.providers.claude.habilitado,
+        Provedor::Codex => config.providers.codex.habilitado,
+    }
+}
+
+/// Um card da tela "Uso atual": uma conta conectada ou, para um provedor sem conta,
+/// o card dele (habilitado: "nao conectado"; desabilitado: um card so',
+/// "desabilitado"), com a chave do provedor.
+struct EntradaUso {
+    chave: String,
+    provedor: Provedor,
+    /// Apelido, senao o e-mail. `None` no card do provedor sem conta.
+    rotulo: Option<String>,
+    principal: bool,
+    habilitado: bool,
+}
+
+/// Cards da tela "Uso atual", na ordem salva em `contas.json` (ver
+/// `contas::ordenar`). A ordem natural, de onde saem as posicoes das contas novas,
+/// e' a dos provedores no `config.json` com a principal primeiro.
+fn entradas_de_uso(
+    config: &AppConfig,
+    config_dir: &Path,
+    prefs: &contas::Prefs,
+) -> Vec<EntradaUso> {
+    let mut entradas = Vec::new();
+    for provedor in config
+        .providers
+        .ordem
+        .iter()
+        .filter_map(|k| Provedor::da_chave(k))
+    {
+        let habilitado = provedor_habilitado(config, provedor);
+        let contas = if habilitado {
+            contas::listar(config_dir, provedor)
+        } else {
+            Vec::new()
+        };
+        if contas.is_empty() {
+            entradas.push(EntradaUso {
+                chave: provedor.chave().to_string(),
+                provedor,
+                rotulo: None,
+                principal: true,
+                habilitado,
+            });
+        }
+        for conta in contas {
+            let rotulo = prefs
+                .apelido(&conta.chave)
+                .map(str::to_string)
+                .or(conta.email);
+            entradas.push(EntradaUso {
+                chave: conta.chave,
+                provedor,
+                rotulo,
+                principal: conta.principal,
+                habilitado,
+            });
+        }
+    }
+    let presentes: Vec<String> = entradas.iter().map(|e| e.chave.clone()).collect();
+    let ordem = contas::ordenar(&presentes, &prefs.ordem);
+    entradas.sort_by_key(|e| ordem.iter().position(|chave| *chave == e.chave));
+    entradas
+}
+
+/// Estado de uso exposto a' tela "Uso atual": um card por conta (ver
+/// `entradas_de_uso`) com a metrica atual (a mesma fonte do tray e da barra de
+/// tarefas) e o historico, mais se a coleta esta' pausada. Nao faz rede: le' o
+/// snapshot ja' coletado pelo worker e a lista de contas do disco.
 fn usage_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
-    // Le' o config fora do lock (faz I/O de disco); depois trava o snapshot so' o
-    // tempo de montar as series do historico (downsample, sem I/O) e clonar as duas
+    // Le' config e contas fora do lock (I/O de disco); depois trava o snapshot so'
+    // o tempo de montar as series do historico (downsample, sem I/O) e clonar as
     // metricas — sem clonar o anel inteiro de amostras.
     let config = read_config(paths);
     let chart_enabled = config.uso_atual.grafico;
-    let (paused, last_error, claude_metric, codex_metric, history) = {
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let entradas = entradas_de_uso(&config, &paths.config_dir, &prefs);
+    let (paused, last_error, cards) = {
         let snapshot = lock_snapshot(shared);
-        // Com o grafico desligado, devolve series vazias (o anel ja' e' limpo no
-        // worker; aqui garante que a UI nunca receba pontos residuais).
-        let history = if chart_enabled {
-            json!({
-                "claude": {
-                    "session": downsample_usage(&snapshot.usage_history, |s| s.claude_5h),
-                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.claude_7d),
-                },
-                "codex": {
-                    "session": downsample_usage(&snapshot.usage_history, |s| s.codex_5h),
-                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.codex_7d),
-                },
+        let cards: Vec<Value> = entradas
+            .iter()
+            .map(|entrada| {
+                // Com o grafico desligado, devolve series vazias (o anel ja' e' limpo
+                // no worker; aqui garante que a UI nunca receba pontos residuais).
+                let serie = |semanal: bool| {
+                    if !chart_enabled {
+                        return Vec::new();
+                    }
+                    downsample_usage(&snapshot.usage_history, |amostra| {
+                        amostra.valores.get(&entrada.chave).and_then(|par| {
+                            if semanal {
+                                par.1
+                            } else {
+                                par.0
+                            }
+                        })
+                    })
+                };
+                json!({
+                    "chave": entrada.chave,
+                    "provedor": entrada.provedor.chave(),
+                    "rotulo": entrada.rotulo,
+                    "principal": entrada.principal,
+                    "habilitado": entrada.habilitado,
+                    "metric": snapshot.metrics.get(&entrada.chave),
+                    "history": { "session": serie(false), "weekly": serie(true) },
+                })
             })
-        } else {
-            json!({
-                "claude": { "session": [], "weekly": [] },
-                "codex": { "session": [], "weekly": [] },
-            })
-        };
-        (
-            snapshot.paused,
-            snapshot.last_error.clone(),
-            snapshot.claude_metric.clone(),
-            snapshot.codex_metric.clone(),
-            history,
-        )
+            .collect();
+        (snapshot.paused, snapshot.last_error.clone(), cards)
     };
     json!({
         "paused": paused,
         "lastError": last_error,
         "chartEnabled": chart_enabled,
         "chartWarnOnDisable": config.uso_atual.avisar_ao_desligar,
-        "ordem": config.providers.ordem,
-        "claude": {
-            "habilitado": config.providers.claude.habilitado,
-            "metric": claude_metric,
-        },
-        "codex": {
-            "habilitado": config.providers.codex.habilitado,
-            "metric": codex_metric,
-        },
-        "history": history,
+        "contas": cards,
     })
 }
 
@@ -1047,10 +1131,10 @@ async fn get_codex_stats(
     .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
 
-/// Coleta o historico de uso do Codex (rede): resolve o `auth.json` do login pelo
-/// navegador e delega para `codex_dashboard::collect` com o cliente HTTP compartilhado.
-/// Compartilhado pelo comando nativo `get_codex_stats` e pelo handler HTTP, que
-/// antes duplicavam esta logica.
+/// Coleta o historico de uso do Codex (rede): resolve o `auth.json` da conta
+/// principal e delega para `codex_dashboard::collect` com o cliente HTTP
+/// compartilhado. Compartilhado pelo comando nativo `get_codex_stats` e pelo
+/// handler HTTP, que antes duplicavam esta logica.
 pub(crate) fn collect_codex_stats(
     paths: &RuntimePaths,
     days: u32,
@@ -1058,7 +1142,12 @@ pub(crate) fn collect_codex_stats(
     end: Option<String>,
 ) -> Value {
     let client = http_client();
-    let auth_path = match resolve_codex_auth_file(&client, paths) {
+    let arquivo = contas::listar(&paths.config_dir, Provedor::Codex)
+        .into_iter()
+        .find(|conta| conta.principal)
+        .map(|conta| conta.arquivo)
+        .unwrap_or_else(|| codex_auth::auth_file(&paths.config_dir));
+    let auth_path = match resolve_codex_auth_file(&client, &arquivo) {
         Ok(path) => path,
         Err(error) => return json!({ "error": error }),
     };
@@ -1175,22 +1264,33 @@ fn set_usage_chart(
     Ok(usage_value(paths.inner(), shared.inner()))
 }
 
-/// Define a ordem de exibição dos provedores — uma única config aplicada à tela
-/// "Uso atual", ao widget e à barra de tarefas. Persiste em `config.providers.ordem`
-/// (normalizada para uma permutação exata dos provedores conhecidos) e reaplica o
-/// tray/barra na hora. Devolve o estado de uso já atualizado (com a nova `ordem`).
+/// Define a ordem dos cards da tela "Uso atual" (chaves de conta), gravada em
+/// `contas.json`. O widget e a barra de tarefas mostram um card por provedor e
+/// seguem `config.providers.ordem`, que passa a acompanhar a posicao do primeiro
+/// card de cada provedor — e' tambem a ordem que a versao anterior usa. Reaplica o
+/// tray/barra na hora e devolve o estado de uso ja' atualizado.
 #[tauri::command]
-fn set_providers_order(
+fn set_contas_ordem(
     app: AppHandle,
     paths: State<'_, RuntimePaths>,
     shared: State<'_, Arc<SharedState>>,
     order: Vec<String>,
 ) -> Result<Value, String> {
+    contas::definir_ordem(&paths.config_dir, &order)?;
+    let mut ordem_provedores: Vec<String> = Vec::new();
+    for provedor in order.iter().filter_map(|chave| Provedor::da_chave(chave)) {
+        let chave = provedor.chave().to_string();
+        if !ordem_provedores.contains(&chave) {
+            ordem_provedores.push(chave);
+        }
+    }
+    normalize_provider_order(&mut ordem_provedores);
     let mut config = read_config(paths.inner());
-    config.providers.ordem = order;
-    normalize_config(&mut config);
-    write_config(paths.inner(), &config)
-        .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    if config.providers.ordem != ordem_provedores {
+        config.providers.ordem = ordem_provedores;
+        write_config(paths.inner(), &config)
+            .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    }
     let _ = refresh_tray(&app, shared.inner());
     Ok(usage_value(paths.inner(), shared.inner()))
 }
@@ -1247,11 +1347,11 @@ fn widget_state_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value 
         "paused": snapshot.paused,
         "claude": {
             "habilitado": config.providers.claude.habilitado,
-            "metric": snapshot.claude_metric,
+            "metric": snapshot.principal_metric("claude"),
         },
         "codex": {
             "habilitado": config.providers.codex.habilitado,
-            "metric": snapshot.codex_metric,
+            "metric": snapshot.principal_metric("codex"),
         },
     })
 }
@@ -1790,20 +1890,59 @@ fn http_client() -> Client {
         .clone()
 }
 
-/// Resultado da coleta de um provedor: `None` quando o provedor esta'
-/// desabilitado; senao `Ok(metrica)` ou `Err(mensagem)`.
-type CollectOutcome = Option<Result<UsageMetric, String>>;
+/// Uma conta a coletar no ciclo. Um provedor habilitado sem conta conectada entra
+/// com a chave do provedor e o arquivo legado (ausente): a coleta devolve o erro
+/// "nao conectado", que e' o card de sempre.
+struct Alvo {
+    provedor: Provedor,
+    chave: String,
+    arquivo: PathBuf,
+    principal: bool,
+}
 
-/// Coleta as metricas dos providers habilitados (sempre, para alimentar o tray, a
-/// barra e o widget) e envia ao Loki conforme as regras de envio.
+fn alvos_da_coleta(config: &AppConfig, config_dir: &Path) -> Vec<Alvo> {
+    let mut alvos = Vec::new();
+    for provedor in Provedor::TODOS {
+        if !provedor_habilitado(config, provedor) {
+            continue;
+        }
+        let contas = contas::listar(config_dir, provedor);
+        if contas.is_empty() {
+            alvos.push(Alvo {
+                provedor,
+                chave: provedor.chave().to_string(),
+                arquivo: provedor.arquivo_principal(config_dir),
+                principal: true,
+            });
+        }
+        alvos.extend(contas.into_iter().map(|conta| Alvo {
+            provedor,
+            chave: conta.chave,
+            arquivo: conta.arquivo,
+            principal: conta.principal,
+        }));
+    }
+    alvos
+}
+
+/// Se a metrica da conta vai ao Loki: envio nao pausado, envio do provedor ligado
+/// em `config.envio` e a conta e' a principal. So' a principal e' enviada, entao o
+/// Loki continua recebendo um stream por provedor, como na versao anterior.
+fn envia_ao_loki(config: &AppConfig, alvo: &Alvo, pausado: bool) -> bool {
+    let provedor_ligado = match alvo.provedor {
+        Provedor::Claude => config.envio.claude,
+        Provedor::Codex => config.envio.codex,
+    };
+    !pausado && provedor_ligado && alvo.principal
+}
+
+/// Coleta as metricas de todas as contas dos providers habilitados (sempre, para
+/// alimentar a tela "Uso atual", o tray, a barra e o widget) e envia ao Loki
+/// conforme as regras de envio (ver `envia_ao_loki`).
 ///
-/// O envio de cada provider acontece quando:
-/// - o envio nao esta' pausado, **e**
-/// - o envio daquele provider esta' habilitado em `config.envio`.
-///
-/// Ou seja, com o envio pausado/desabilitado a coleta continua normalmente; so' o
-/// trafego ao Loki e' suprimido. Cada tentativa de envio (sucesso ou falha) e'
-/// registrada no historico (`send_log`) exibido na tela "Envio de dados".
+/// Com o envio pausado/desabilitado a coleta continua normalmente; so' o trafego
+/// ao Loki e' suprimido. Cada tentativa de envio (sucesso ou falha) e' registrada
+/// no historico (`send_log`) exibido na tela "Envio de dados".
 fn run_collection_cycle<R: Runtime>(
     app: &AppHandle<R>,
     paths: &RuntimePaths,
@@ -1815,53 +1954,67 @@ fn run_collection_cycle<R: Runtime>(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let config = read_config(paths);
     let client = http_client();
-
-    // O ciclo respeita a pausa geral; o desligamento por provider (config.envio)
-    // tambem e' respeitado.
     let paused = lock_snapshot(shared).paused;
-    let send_allowed = !paused;
-    let send_codex = send_allowed && config.envio.codex;
-    let send_claude = send_allowed && config.envio.claude;
 
-    let codex_enabled = config.providers.codex.habilitado;
-    let claude_enabled = config.providers.claude.habilitado;
+    let alvos = alvos_da_coleta(&config, &paths.config_dir);
+    // O snapshot passa a refletir as contas atuais: some a metrica de conta
+    // removida ou de provedor desligado, e fica registrada a principal de cada um.
+    {
+        let mut snapshot = lock_snapshot(shared);
+        snapshot
+            .metrics
+            .retain(|chave, _| alvos.iter().any(|alvo| alvo.chave == *chave));
+        snapshot.principais = alvos
+            .iter()
+            .filter(|alvo| alvo.principal)
+            .map(|alvo| (alvo.provedor.chave().to_string(), alvo.chave.clone()))
+            .collect();
+    }
 
-    // Coleta os dois provedores em paralelo: cada GET tem timeout de 15s, entao
-    // serializa-los faria o ciclo (e a janela do `cycle_lock`) somar as latencias.
-    // As coletas sao puras (client + config), sem tocar no estado compartilhado;
+    // Coleta as contas em paralelo: cada GET tem timeout de 15s, entao serializa-las
+    // faria o ciclo (e a janela do `cycle_lock`) somar as latencias. As coletas sao
+    // puras (client + config + arquivo da conta), sem tocar no estado compartilhado;
     // o processamento (snapshot, envio, log) acontece depois, em sequencia.
-    let (codex_result, claude_result): (CollectOutcome, CollectOutcome) = thread::scope(|scope| {
-        let codex_handle =
-            codex_enabled.then(|| scope.spawn(|| collect_codex_metric(&client, &config, paths)));
-        let claude_result = claude_enabled.then(|| collect_claude_metric(&client, &config, paths));
-        let codex_result = codex_handle.map(|handle| {
-            handle
-                .join()
-                .unwrap_or_else(|_| Err("Panico durante a coleta do Codex.".to_string()))
-        });
-        (codex_result, claude_result)
+    let resultados: Vec<Result<UsageMetric, String>> = thread::scope(|scope| {
+        let (client, config) = (&client, &config);
+        let handles: Vec<_> = alvos
+            .iter()
+            .map(|alvo| {
+                scope.spawn(move || match alvo.provedor {
+                    Provedor::Claude => collect_claude_metric(client, config, &alvo.arquivo),
+                    Provedor::Codex => collect_codex_metric(client, config, &alvo.arquivo),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .zip(&alvos)
+            .map(|(handle, alvo)| {
+                handle.join().unwrap_or_else(|_| {
+                    Err(format!(
+                        "Panico durante a coleta do {}.",
+                        alvo.provedor.nome()
+                    ))
+                })
+            })
+            .collect()
     });
 
     let mut had_error = false;
-    if let Some(result) = codex_result {
-        had_error |= handle_collected(
-            app, paths, shared, &client, &config, "codex", result, send_codex,
-        );
-    }
-    if let Some(result) = claude_result {
+    for (alvo, result) in alvos.iter().zip(resultados) {
         had_error |= handle_collected(
             app,
             paths,
             shared,
             &client,
             &config,
-            "claude",
+            alvo,
             result,
-            send_claude,
+            envia_ao_loki(&config, alvo, paused),
         );
     }
 
-    if !codex_enabled && !claude_enabled {
+    if alvos.is_empty() {
         record_runtime_error(app, "Nenhum provider habilitado.");
     } else if !had_error {
         clear_last_error(shared);
@@ -1915,8 +2068,7 @@ fn maybe_reopen_claude_session(
     {
         let snapshot = lock_snapshot(shared);
         let sem_janela = snapshot
-            .claude_metric
-            .as_ref()
+            .principal_metric("claude")
             .is_some_and(|metric| metric.status == "ok" && metric.reset_em.is_none());
         if !sem_janela {
             return;
@@ -2387,15 +2539,16 @@ fn handle_collected<R: Runtime>(
     shared: &Arc<SharedState>,
     client: &Client,
     config: &AppConfig,
-    ferramenta: &str,
+    alvo: &Alvo,
     result: Result<UsageMetric, String>,
     send_allowed: bool,
 ) -> bool {
+    let ferramenta = alvo.provedor.chave();
     match result {
         Ok(metric) => {
             // A coleta sempre atualiza os dados/UI; o envio ao Loki ocorre conforme
-            // as regras de envio (pausa geral + config.envio).
-            update_metric(shared, metric.clone());
+            // as regras de envio (ver `envia_ao_loki`).
+            update_metric(shared, &alvo.chave, metric.clone());
             if !send_allowed {
                 return false;
             }
@@ -2435,12 +2588,12 @@ fn handle_collected<R: Runtime>(
         }
         Err(error) => {
             let metric = build_error_metric(&config.usuario, ferramenta, &error);
-            update_metric(shared, metric);
+            update_metric(shared, &alvo.chave, metric);
             let _ = append_log_line(
                 paths,
                 "error",
                 "Falha ao coletar metrica.",
-                Some(json!({ "ferramenta": ferramenta, "error": error })),
+                Some(json!({ "ferramenta": ferramenta, "conta": alvo.chave, "error": error })),
             );
             record_runtime_error(app, &error);
             true
@@ -2448,19 +2601,20 @@ fn handle_collected<R: Runtime>(
     }
 }
 
-/// Resolve o arquivo de credenciais do Codex: o arquivo gerenciado do login pelo
-/// navegador (`codex_auth`), renovando o token se preciso. Devolve o caminho pronto
-/// para os leitores (coleta e dashboard).
-fn resolve_codex_auth_file(client: &Client, paths: &RuntimePaths) -> Result<PathBuf, String> {
-    codex_auth::ensure_fresh(client, &paths.config_dir)
+/// Resolve o arquivo de credenciais de uma conta do Codex, renovando o token se
+/// preciso (`codex_auth`). Devolve o caminho pronto para os leitores (coleta e
+/// dashboard).
+fn resolve_codex_auth_file(client: &Client, arquivo: &Path) -> Result<PathBuf, String> {
+    codex_auth::ensure_fresh(client, arquivo)
 }
 
+/// Coleta o uso da conta do Codex cujas credenciais estao em `arquivo`.
 fn collect_codex_metric(
     client: &Client,
     config: &AppConfig,
-    paths: &RuntimePaths,
+    arquivo: &Path,
 ) -> Result<UsageMetric, String> {
-    let auth_path = resolve_codex_auth_file(client, paths)?;
+    let auth_path = resolve_codex_auth_file(client, arquivo)?;
 
     let auth_raw = fs::read_to_string(&auth_path)
         .map_err(|error| format!("Falha ao ler auth.json do Codex: {error}"))?;
@@ -2570,13 +2724,14 @@ fn collect_codex_metric(
     })
 }
 
+/// Coleta o uso da conta do Claude cujas credenciais estao em `arquivo`.
 fn collect_claude_metric(
     client: &Client,
     config: &AppConfig,
-    paths: &RuntimePaths,
+    arquivo: &Path,
 ) -> Result<UsageMetric, String> {
-    // Sessao capturada pelo login pelo navegador (arquivo gerenciado `claude_auth`).
-    let (cookie, organization_id) = claude_auth::credentials(&paths.config_dir)?;
+    // Sessao capturada pelo login pelo navegador (arquivo da conta, `claude_auth`).
+    let (cookie, organization_id) = claude_auth::credentials(arquivo)?;
 
     let response = client
         .get(format!(
@@ -2596,11 +2751,11 @@ fn collect_claude_metric(
     // marca para a UI oferecer "Reconectar"; sucesso limpa a marca.
     let code = response.status().as_u16();
     if code == 401 || code == 403 {
-        claude_auth::set_needs_reconnect(&paths.config_dir, true);
+        claude_auth::set_needs_reconnect(arquivo, true);
         // Mesma mensagem exibida na aba Claude das Configuracoes (reconexao).
         return Err("Sessão expirada. Reconecte sua conta para continuar a coleta.".to_string());
     } else if response.status().is_success() {
-        claude_auth::set_needs_reconnect(&paths.config_dir, false);
+        claude_auth::set_needs_reconnect(arquivo, false);
     }
 
     if !response.status().is_success() {
@@ -2747,12 +2902,9 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         let snapshot = {
             let mut guard = lock_snapshot(shared);
             if let Some(config) = &config {
-                if !config.providers.codex.habilitado {
-                    guard.codex_metric = None;
-                }
-                if !config.providers.claude.habilitado {
-                    guard.claude_metric = None;
-                }
+                guard.metrics.retain(|chave, _| {
+                    Provedor::da_chave(chave).is_some_and(|p| provedor_habilitado(config, p))
+                });
             }
             guard.clone()
         };
@@ -2773,7 +2925,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.codex.habilitado
                         && config.providers.codex.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.codex_metric.as_ref(),
+                        snapshot.principal_metric("codex"),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -2784,7 +2936,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.claude.habilitado
                         && config.providers.claude.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.claude_metric.as_ref(),
+                        snapshot.principal_metric("claude"),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -2796,8 +2948,8 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         #[cfg(target_os = "linux")]
         tray.set_title(Some(format!(
             "C:{} / Cl:{}",
-            metric_text(snapshot.codex_metric.as_ref()),
-            metric_text(snapshot.claude_metric.as_ref())
+            metric_text(snapshot.principal_metric("codex")),
+            metric_text(snapshot.principal_metric("claude"))
         )))?;
 
         // Aplica a config do widget (criar/destruir/sempre-na-frente) em
@@ -2813,13 +2965,10 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
     Ok(())
 }
 
-fn update_metric(shared: &Arc<SharedState>, metric: UsageMetric) {
-    let mut snapshot = lock_snapshot(shared);
-    match metric.ferramenta.as_str() {
-        "codex" => snapshot.codex_metric = Some(metric),
-        "claude" => snapshot.claude_metric = Some(metric),
-        _ => {}
-    }
+fn update_metric(shared: &Arc<SharedState>, chave: &str, metric: UsageMetric) {
+    lock_snapshot(shared)
+        .metrics
+        .insert(chave.to_string(), metric);
 }
 
 fn mark_success(shared: &Arc<SharedState>) {
@@ -2856,11 +3005,11 @@ fn clear_last_error(shared: &Arc<SharedState>) {
 }
 
 /// Registra uma amostra do uso atual no anel de historico (em memoria) e poda o
-/// que passou da janela de 5h. Chamado uma vez por ciclo de coleta, depois que os
-/// dois provedores ja' atualizaram o snapshot. Grava a % de cada janela por
-/// provedor, usando `None` quando o provedor esta' desabilitado ou com erro
-/// naquele instante. Uma amostra totalmente vazia (nenhum dado ainda) e' ignorada
-/// para nao abrir "furos" no comeco.
+/// que passou da janela de 5h. Chamado uma vez por ciclo de coleta, depois que
+/// todas as contas ja' atualizaram o snapshot. Grava a % de cada janela por conta;
+/// conta com erro (ou sem nenhuma janela) fica de fora daquela amostra. Uma amostra
+/// totalmente vazia (nenhum dado ainda) e' ignorada para nao abrir "furos" no
+/// comeco.
 ///
 /// Com `enabled == false` (grafico desligado na tela "Uso atual"), nao grava e
 /// limpa o historico ja' acumulado — para de gravar e "exclui os dados".
@@ -2872,32 +3021,25 @@ fn push_usage_sample(shared: &Arc<SharedState>, enabled: bool) {
         }
         return;
     }
-    let value = |metric: &Option<UsageMetric>, weekly: bool| -> Option<f64> {
-        let metric = metric.as_ref()?;
-        if metric.status == "erro" || metric.erro.is_some() {
-            return None;
-        }
-        if weekly {
-            metric.uso_percentual_7d
-        } else {
-            metric.uso_percentual
-        }
-    };
-    let sample = UsageSample {
-        t: Utc::now().to_rfc3339(),
-        claude_5h: value(&snapshot.claude_metric, false),
-        claude_7d: value(&snapshot.claude_metric, true),
-        codex_5h: value(&snapshot.codex_metric, false),
-        codex_7d: value(&snapshot.codex_metric, true),
-    };
-    if sample.claude_5h.is_none()
-        && sample.claude_7d.is_none()
-        && sample.codex_5h.is_none()
-        && sample.codex_7d.is_none()
-    {
+    let valores: BTreeMap<String, (Option<f64>, Option<f64>)> = snapshot
+        .metrics
+        .iter()
+        .filter(|(_, metric)| metric.status != "erro" && metric.erro.is_none())
+        .map(|(chave, metric)| {
+            (
+                chave.clone(),
+                (metric.uso_percentual, metric.uso_percentual_7d),
+            )
+        })
+        .filter(|(_, (sessao, semanal))| sessao.is_some() || semanal.is_some())
+        .collect();
+    if valores.is_empty() {
         return;
     }
-    snapshot.usage_history.push(sample);
+    snapshot.usage_history.push(UsageSample {
+        t: Utc::now().to_rfc3339(),
+        valores,
+    });
     prune_usage_history(&mut snapshot.usage_history);
 }
 
@@ -3787,7 +3929,7 @@ fn capture_claude_login(
         [org] => {
             let _ = window.close();
             let email = claude_auth::fetch_email(&client, &session_key);
-            claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)
+            salvar_login_claude(paths, &session_key, &org.uuid, email)
         }
         // Varias orgs com "chat": a coleta e' por org e escolher a errada faz o app
         // reportar 0% (ex.: org pessoal antiga vs. org de time usada). A propria janela
@@ -3796,9 +3938,26 @@ fn capture_claude_login(
         _ => {
             claude_auth::set_pending_login(claude_auth::PendingLogin { session_key, orgs });
             show_claude_org_picker(app, window);
-            wait_claude_org_choice(app, window, paths, cancel_flag)
+            wait_claude_org_choice(app, window, cancel_flag)
         }
     }
+}
+
+/// Grava um login do Claude no arquivo da conta — a mesma conta reconectada cai no
+/// mesmo arquivo, uma nova vira principal (se o provedor nao tem) ou extra; ver
+/// `contas::destino_do_login` — e devolve o status dela, com a chave.
+fn salvar_login_claude(
+    paths: &RuntimePaths,
+    session_key: &str,
+    organization_id: &str,
+    email: Option<String>,
+) -> Result<Value, String> {
+    let identidade = claude_auth::identity_of(organization_id, email.as_deref());
+    let (arquivo, chave) =
+        contas::destino_do_login(&paths.config_dir, Provedor::Claude, &identidade);
+    let mut status = claude_auth::store(&arquivo, session_key, organization_id, email)?;
+    status["chave"] = json!(chave);
+    Ok(status)
 }
 
 /// Navega a janela de login (que estava na claude.ai) para a pagina local de escolha
@@ -3816,12 +3975,12 @@ fn show_claude_org_picker(app: &AppHandle, window: &WebviewWindow) {
 }
 
 /// Espera a escolha da org na janela de login. `claude_select_org` consome o login
-/// pendente e fecha a janela; se ela fechar com o login ainda pendente, o usuario
-/// desistiu. Devolve o status gravado, ou "Login cancelado.".
+/// pendente, grava e fecha a janela; se ela fechar com o login ainda pendente, o
+/// usuario desistiu. Devolve `null` quando a conta foi gravada (a aba relê a lista
+/// de contas), ou "Login cancelado.".
 fn wait_claude_org_choice(
     app: &AppHandle,
     window: &WebviewWindow,
-    paths: &RuntimePaths,
     cancel_flag: &AtomicBool,
 ) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(5 * 60);
@@ -3834,7 +3993,7 @@ fn wait_claude_org_choice(
         if app.get_webview_window("claude-login").is_none() {
             return match claude_auth::take_pending_login() {
                 Some(_) => Err("Login cancelado.".to_string()),
-                None => Ok(claude_auth::status(&paths.config_dir)),
+                None => Ok(Value::Null),
             };
         }
         thread::sleep(Duration::from_millis(300));
@@ -3898,16 +4057,76 @@ fn claude_org_utilization(
         .map(round_percent)
 }
 
-/// Status do login do Claude pelo navegador (sem rede), para a aba Claude.
-#[tauri::command]
-fn claude_auth_status(paths: State<'_, RuntimePaths>) -> Value {
-    claude_auth::status(&paths.config_dir)
+/// Contas conectadas do provedor, cada uma com o status do login (sem rede), a
+/// chave, se e' a principal e o apelido — a lista de contas da aba do provedor.
+fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
+    let prefs = contas::ler_prefs(config_dir);
+    let lista = contas::listar(config_dir, provedor)
+        .into_iter()
+        .map(|conta| {
+            let mut status = match provedor {
+                Provedor::Claude => claude_auth::status(&conta.arquivo),
+                Provedor::Codex => codex_auth::status(&conta.arquivo),
+            };
+            status["chave"] = json!(conta.chave);
+            status["principal"] = json!(conta.principal);
+            status["apelido"] = json!(prefs.apelido(&conta.chave));
+            status
+        })
+        .collect();
+    Value::Array(lista)
 }
 
-/// Remove as credenciais do login do Claude pelo navegador ("Desconectar").
+/// Contas do Claude com o status de cada login (sem rede), para a aba Claude.
 #[tauri::command]
-fn claude_logout(paths: State<'_, RuntimePaths>) -> Result<(), String> {
-    claude_auth::logout(&paths.config_dir)
+fn claude_auth_status(paths: State<'_, RuntimePaths>) -> Value {
+    status_das_contas(&paths.config_dir, Provedor::Claude)
+}
+
+/// Remove uma conta ("Remover"): apaga as credenciais e as preferencias dela. Se
+/// era a principal, a proxima do provedor assume.
+#[tauri::command]
+fn remover_conta(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::remover(&paths.config_dir, &conta)?;
+    lock_snapshot(shared.inner()).metrics.remove(&conta);
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
+}
+
+/// Define (ou limpa, com vazio) o apelido de uma conta, exibido no lugar do e-mail.
+#[tauri::command]
+fn set_conta_apelido(
+    paths: State<'_, RuntimePaths>,
+    conta: String,
+    apelido: Option<String>,
+) -> Result<(), String> {
+    contas::definir_apelido(&paths.config_dir, &conta, apelido)
+}
+
+/// Torna uma conta a principal do provedor: a que o tray, a barra, o widget, o
+/// envio ao Loki e a versao anterior do app usam.
+#[tauri::command]
+fn set_conta_principal(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::tornar_principal(&paths.config_dir, &conta)?;
+    // Sem esperar o proximo ciclo: tray, barra e widget passam a mostrar a nova
+    // principal (a metrica dela ja' esta' no snapshot).
+    if let Some(provedor) = Provedor::da_chave(&conta) {
+        lock_snapshot(shared.inner())
+            .principais
+            .insert(provedor.chave().to_string(), conta.clone());
+    }
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
 }
 
 /// Cancela um login do Claude em andamento (botao "Cancelar"): faz o loop de
@@ -3933,12 +4152,7 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
             .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
         let client = http_client();
         let email = claude_auth::fetch_email(&client, &pending.session_key);
-        match claude_auth::store(
-            &paths.config_dir,
-            &pending.session_key,
-            &organization_id,
-            email,
-        ) {
+        match salvar_login_claude(&paths, &pending.session_key, &organization_id, email) {
             Ok(status) => {
                 if let Some(window) = app.get_webview_window("claude-login") {
                     let _ = window.close();
@@ -3956,32 +4170,32 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
     .map_err(|error| error.to_string())?
 }
 
-/// Login do Codex pelo navegador (OAuth + PKCE), alternativa ao caminho do
-/// `auth.json`. E' bloqueante (sobe o servidor de callback e aguarda ate' ~5 min o
-/// usuario concluir no navegador), entao roda em `spawn_blocking` para nao travar o
-/// event loop. Grava os tokens no arquivo gerenciado e devolve o status do login
-/// (`{connected,email,expiresAt,accountId}`).
+/// Login do Codex pelo navegador (OAuth + PKCE). E' bloqueante (sobe o servidor de
+/// callback e aguarda ate' ~5 min o usuario concluir no navegador), entao roda em
+/// `spawn_blocking` para nao travar o event loop. Grava os tokens no arquivo da
+/// conta — a mesma conta reconectada cai no mesmo arquivo; ver
+/// `contas::destino_do_login` — e devolve o status do login
+/// (`{connected,email,expiresAt,accountId,chave}`).
 #[tauri::command]
 async fn codex_login(app: AppHandle) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = app.state::<RuntimePaths>().inner().clone();
-        codex_auth::login(&http_client(), &paths.config_dir)
+        let outra_conta = !contas::listar(&paths.config_dir, Provedor::Codex).is_empty();
+        let login = codex_auth::login(&http_client(), outra_conta)?;
+        let (arquivo, chave) =
+            contas::destino_do_login(&paths.config_dir, Provedor::Codex, &login.identity());
+        let mut status = codex_auth::save_login(&arquivo, &login)?;
+        status["chave"] = json!(chave);
+        Ok(status)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
-/// Status do login do Codex pelo navegador (sem rede), para a aba Codex das
-/// Configuracoes exibir "Conectado como ...".
+/// Contas do Codex com o status de cada login (sem rede), para a aba Codex.
 #[tauri::command]
 fn codex_auth_status(paths: State<'_, RuntimePaths>) -> Value {
-    codex_auth::status(&paths.config_dir)
-}
-
-/// Remove as credenciais do login pelo navegador ("Desconectar").
-#[tauri::command]
-fn codex_logout(paths: State<'_, RuntimePaths>) -> Result<(), String> {
-    codex_auth::logout(&paths.config_dir)
+    status_das_contas(&paths.config_dir, Provedor::Codex)
 }
 
 /// Cancela um login pelo navegador em andamento (botao "Cancelar"): libera a porta
@@ -4033,6 +4247,95 @@ mod tests {
             .with_ymd_and_hms(2026, 8, 19, hora, minuto, segundo)
             .single()
             .expect("horario local valido (dia sem salto de fuso)")
+    }
+
+    /// A versao anterior regrava o `config.json` so' com os campos que conhece e
+    /// descarta chaves novas de `providers.ordem`. Enquanto ela puder rodar na mesma
+    /// maquina, o formato do `config.json` nao pode mudar: o que e' novo (varias
+    /// contas) vai para `contas.json`. A fixture e' o `AppConfig::default()` da
+    /// 0.2.71.
+    #[test]
+    fn config_json_mantem_o_formato_da_versao_anterior() {
+        fn formato(valor: &Value) -> Value {
+            match valor {
+                Value::Object(campos) => Value::Object(
+                    campos
+                        .iter()
+                        .map(|(chave, valor)| (chave.clone(), formato(valor)))
+                        .collect(),
+                ),
+                Value::Array(_) => json!("array"),
+                Value::String(_) => json!("string"),
+                Value::Number(_) => json!("number"),
+                Value::Bool(_) => json!("bool"),
+                Value::Null => json!("null"),
+            }
+        }
+        let legado: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/config-legado.json"))
+                .expect("fixture valida");
+        let atual = serde_json::to_value(AppConfig::default()).expect("serializa");
+        assert_eq!(formato(&atual), formato(&legado));
+        // E o config da versao anterior continua sendo lido, sem cair no padrao.
+        let mut antigo = legado.clone();
+        antigo["usuario"] = json!("fulano");
+        let lido: AppConfig = serde_json::from_value(antigo).expect("config antigo le'");
+        assert_eq!(lido.usuario, "fulano");
+    }
+
+    fn pasta_de_teste(nome: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ai-usage-tray-agent-teste-{nome}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("criar a pasta do teste");
+        dir
+    }
+
+    #[test]
+    fn alvos_da_coleta_uma_por_conta_e_o_card_do_provedor_sem_conta() {
+        let dir = pasta_de_teste("alvos");
+        for (org, email) in [("org-a", "a@x.com"), ("org-b", "b@x.com")] {
+            let identidade = claude_auth::identity_of(org, Some(email));
+            let (arquivo, _) = contas::destino_do_login(&dir, Provedor::Claude, &identidade);
+            claude_auth::store(&arquivo, "sk", org, Some(email.to_string())).unwrap();
+        }
+        let config = AppConfig::default();
+        let alvos = alvos_da_coleta(&config, &dir);
+        let resumo: Vec<(&str, bool)> = alvos
+            .iter()
+            .map(|alvo| (alvo.provedor.chave(), alvo.principal))
+            .collect();
+        assert_eq!(
+            resumo,
+            vec![("claude", true), ("claude", false), ("codex", true)]
+        );
+        // Codex sem conta: a chave e' a do provedor e o arquivo e' o legado (ausente),
+        // que a coleta transforma no card de "nao conectado".
+        assert_eq!(alvos[2].chave, "codex");
+        assert_eq!(alvos[2].arquivo, codex_auth::auth_file(&dir));
+
+        let mut sem_codex = AppConfig::default();
+        sem_codex.providers.codex.habilitado = false;
+        assert_eq!(alvos_da_coleta(&sem_codex, &dir).len(), 2);
+    }
+
+    #[test]
+    fn so_a_principal_vai_ao_loki() {
+        let alvo = |principal: bool| Alvo {
+            provedor: Provedor::Claude,
+            chave: "claude:x".to_string(),
+            arquivo: PathBuf::new(),
+            principal,
+        };
+        let config = AppConfig::default();
+        assert!(envia_ao_loki(&config, &alvo(true), false));
+        assert!(!envia_ao_loki(&config, &alvo(false), false));
+        assert!(!envia_ao_loki(&config, &alvo(true), true));
+        let mut sem_claude = AppConfig::default();
+        sem_claude.envio.claude = false;
+        assert!(!envia_ao_loki(&sem_claude, &alvo(true), false));
     }
 
     #[test]
@@ -4197,20 +4500,29 @@ exit /b 1
             pending_update: Mutex::new(None),
             sessao_auto: Mutex::new(SessaoAutoState::default()),
         });
-        // O gatilho do recurso: coleta bem-sucedida sem janela de sessao.
-        lock_snapshot(&shared).claude_metric = Some(UsageMetric {
-            usuario: "teste".to_string(),
-            ferramenta: "claude".to_string(),
-            uso_percentual: Some(0.0),
-            restante_percentual: Some(100.0),
-            status: "ok".to_string(),
-            coletado_em: Utc::now().to_rfc3339(),
-            reset_em: None,
-            erro: None,
-            uso_percentual_7d: None,
-            restante_percentual_7d: None,
-            reset_em_7d: None,
-        });
+        // O gatilho do recurso: coleta bem-sucedida da principal sem janela de sessao.
+        {
+            let mut snapshot = lock_snapshot(&shared);
+            snapshot
+                .principais
+                .insert("claude".to_string(), "claude:teste".to_string());
+            snapshot.metrics.insert(
+                "claude:teste".to_string(),
+                UsageMetric {
+                    usuario: "teste".to_string(),
+                    ferramenta: "claude".to_string(),
+                    uso_percentual: Some(0.0),
+                    restante_percentual: Some(100.0),
+                    status: "ok".to_string(),
+                    coletado_em: Utc::now().to_rfc3339(),
+                    reset_em: None,
+                    erro: None,
+                    uso_percentual_7d: None,
+                    restante_percentual_7d: None,
+                    reset_em_7d: None,
+                },
+            );
+        }
 
         maybe_reopen_claude_session(&paths, &shared, &config);
 
