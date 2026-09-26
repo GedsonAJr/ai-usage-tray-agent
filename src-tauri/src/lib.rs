@@ -3933,7 +3933,12 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
             .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
         let client = http_client();
         let email = claude_auth::fetch_email(&client, &pending.session_key);
-        match claude_auth::store(&paths.config_dir, &pending.session_key, &organization_id, email) {
+        match claude_auth::store(
+            &paths.config_dir,
+            &pending.session_key,
+            &organization_id,
+            email,
+        ) {
             Ok(status) => {
                 if let Some(window) = app.get_webview_window("claude-login") {
                     let _ = window.close();

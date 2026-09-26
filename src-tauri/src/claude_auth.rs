@@ -201,13 +201,19 @@ pub fn set_pending_login(pending: PendingLogin) {
 
 /// Le' o login pendente sem consumi-lo (a pagina de escolha lista as orgs).
 pub fn peek_pending_login() -> Option<PendingLogin> {
-    pending_login().lock().unwrap_or_else(|p| p.into_inner()).clone()
+    pending_login()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
 }
 
 /// Consome o login pendente (uma vez): ao confirmar a org, ou ao descartar quando o
 /// usuario fecha a janela sem escolher.
 pub fn take_pending_login() -> Option<PendingLogin> {
-    pending_login().lock().unwrap_or_else(|p| p.into_inner()).take()
+    pending_login()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take()
 }
 
 // ---- API publica usada por lib.rs --------------------------------------------
