@@ -358,6 +358,10 @@ async function setEnvioProvider(ferramenta: "codex" | "claude", enviar: boolean)
 // barra, o widget e o envio ao Loki usam.
 type ProvedorConta = "codex" | "claude";
 
+/// Espelha `contas::MAX_CONTAS_POR_PROVEDOR` (limite de design). O backend recusa a
+/// conta a mais de qualquer forma; aqui só esconde o "Adicionar conta".
+const MAX_CONTAS_POR_PROVEDOR = 2;
+
 interface ContaStatus {
   /// "<provedor>:<id>", estável entre reconexões.
   chave: string;
@@ -427,18 +431,21 @@ function contaHtml(p: ProvedorConta, c: ContaStatus, varias: boolean): string {
 }
 
 /// Desenha a lista de contas do provedor e ajusta o botão de login ("Conectar" sem
-/// conta, "Adicionar conta" com ao menos uma) e o texto de status.
+/// conta, "Adicionar conta" com ao menos uma, nenhum no limite) e o texto de status.
 function renderContas(p: ProvedorConta): void {
   const ui = PROVEDORES[p];
   const varias = ui.contas.length > 1;
+  const noLimite = ui.contas.length >= MAX_CONTAS_POR_PROVEDOR;
   $(`set-${p}Contas`).innerHTML = ui.contas.map((c) => contaHtml(p, c, varias)).join("");
   const loginBtn = $(`set-${p}Login`);
   loginBtn.textContent = ui.contas.length ? "Adicionar conta" : "Conectar com o navegador";
-  loginBtn.hidden = ui.loginEmAndamento;
+  loginBtn.hidden = ui.loginEmAndamento || noLimite;
   const statusEl = $(`set-${p}AuthStatus`);
   if (!ui.loginEmAndamento) {
-    statusEl.textContent = "Conecte sua conta para iniciar a coleta.";
-    statusEl.hidden = ui.contas.length > 0;
+    statusEl.textContent = noLimite
+      ? `Limite de ${MAX_CONTAS_POR_PROVEDOR} contas. Remova uma para conectar outra.`
+      : "Conecte sua conta para iniciar a coleta.";
+    statusEl.hidden = ui.contas.length > 0 && !noLimite;
   }
   syncProviderHints();
 }

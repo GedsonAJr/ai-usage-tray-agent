@@ -31,6 +31,11 @@ use crate::{claude_auth, codex_auth};
 /// Arquivo com as preferencias por conta (apelido, ordem). So' esta versao o le'.
 const ARQUIVO_PREFS: &str = "contas.json";
 
+/// Quantas contas cada provedor aceita. Limite de design, nao tecnico: as telas
+/// foram pensadas para ate' duas. O frontend espelha o valor em `settings.ts`
+/// (`MAX_CONTAS_POR_PROVEDOR`) para esconder o "Adicionar conta".
+pub const MAX_CONTAS_POR_PROVEDOR: usize = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provedor {
     Claude,
@@ -211,26 +216,34 @@ fn listar_sem_trava(config_dir: &Path, provedor: Provedor) -> Vec<Conta> {
 
 /// Onde gravar um login recem-feito, pela identidade da conta: no arquivo da
 /// conta que ja' tem essa chave (reconectar nao duplica), no arquivo legado se o
-/// provedor ainda nao tem principal, ou num arquivo novo em `contas/`.
+/// provedor ainda nao tem principal, ou num arquivo novo em `contas/`. Erro se a
+/// conta e' nova e o provedor ja' tem `MAX_CONTAS_POR_PROVEDOR` — reconectar uma
+/// das existentes continua valendo.
 pub fn destino_do_login(
     config_dir: &Path,
     provedor: Provedor,
     identidade: &str,
-) -> (PathBuf, String) {
+) -> Result<(PathBuf, String), String> {
     let _trava = trava();
     let chave = chave_da_identidade(provedor, identidade);
     let contas = listar_sem_trava(config_dir, provedor);
     if let Some(conta) = contas.iter().find(|conta| conta.chave == chave) {
-        return (conta.arquivo.clone(), chave);
+        return Ok((conta.arquivo.clone(), chave));
+    }
+    if contas.len() >= MAX_CONTAS_POR_PROVEDOR {
+        return Err(format!(
+            "O {} aceita até {MAX_CONTAS_POR_PROVEDOR} contas. Remova uma para conectar outra.",
+            provedor.nome()
+        ));
     }
     let legado = provedor.arquivo_principal(config_dir);
     if !legado.exists() {
-        return (legado, chave);
+        return Ok((legado, chave));
     }
     let arquivo = provedor
         .pasta_extras(config_dir)
         .join(format!("{}.json", sufixo(&chave)));
-    (arquivo, chave)
+    Ok((arquivo, chave))
 }
 
 /// Promove uma conta extra a principal: a principal atual vai para `contas/` e a
@@ -455,12 +468,12 @@ mod tests {
     fn login_novo_vai_para_o_legado_e_depois_para_contas() {
         let dir = pasta("destino");
         let id_a = claude_auth::identity_of("org-a", Some("a@x.com"));
-        let (arquivo, chave_a) = destino_do_login(&dir, Provedor::Claude, &id_a);
+        let (arquivo, chave_a) = destino_do_login(&dir, Provedor::Claude, &id_a).unwrap();
         assert_eq!(arquivo, claude_auth::auth_file(&dir));
         claude(&arquivo, "org-a", "a@x.com");
 
         let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
-        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b);
+        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b).unwrap();
         assert_ne!(arquivo_b, claude_auth::auth_file(&dir));
         claude(&arquivo_b, "org-b", "b@x.com");
 
@@ -471,19 +484,38 @@ mod tests {
     }
 
     #[test]
+    fn terceira_conta_e_recusada_mas_reconectar_continua_valendo() {
+        let dir = pasta("limite");
+        for (org, email) in [("org-a", "a@x.com"), ("org-b", "b@x.com")] {
+            let identidade = claude_auth::identity_of(org, Some(email));
+            let (arquivo, _) = destino_do_login(&dir, Provedor::Claude, &identidade).unwrap();
+            claude(&arquivo, org, email);
+        }
+        let id_c = claude_auth::identity_of("org-c", Some("c@x.com"));
+        let erro = destino_do_login(&dir, Provedor::Claude, &id_c).unwrap_err();
+        assert!(erro.contains("até 2 contas"), "mensagem: {erro}");
+        // Reconectar uma das duas nao esbarra no limite.
+        let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
+        assert!(destino_do_login(&dir, Provedor::Claude, &id_b).is_ok());
+        // O limite e' por provedor: o Codex continua livre.
+        assert!(destino_do_login(&dir, Provedor::Codex, "acc|c@x.com").is_ok());
+        assert_eq!(listar(&dir, Provedor::Claude).len(), 2);
+    }
+
+    #[test]
     fn reconectar_a_mesma_conta_nao_duplica() {
         let dir = pasta("dedupe");
         claude(&claude_auth::auth_file(&dir), "org-a", "a@x.com");
         let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
-        let (arquivo_b, _) = destino_do_login(&dir, Provedor::Claude, &id_b);
+        let (arquivo_b, _) = destino_do_login(&dir, Provedor::Claude, &id_b).unwrap();
         claude(&arquivo_b, "org-b", "b@x.com");
 
         // E-mail com caixa diferente continua sendo a mesma conta.
         let id_b_de_novo = claude_auth::identity_of("org-b", Some("B@X.com"));
-        let (destino, _) = destino_do_login(&dir, Provedor::Claude, &id_b_de_novo);
+        let (destino, _) = destino_do_login(&dir, Provedor::Claude, &id_b_de_novo).unwrap();
         assert_eq!(destino, arquivo_b);
         let id_a = claude_auth::identity_of("org-a", Some("a@x.com"));
-        let (destino, _) = destino_do_login(&dir, Provedor::Claude, &id_a);
+        let (destino, _) = destino_do_login(&dir, Provedor::Claude, &id_a).unwrap();
         assert_eq!(destino, claude_auth::auth_file(&dir));
         assert_eq!(listar(&dir, Provedor::Claude).len(), 2);
     }
@@ -493,7 +525,7 @@ mod tests {
         let dir = pasta("promover");
         codex(&codex_auth::auth_file(&dir), "acc-a", "a@x.com");
         let id_b = "acc-b|b@x.com";
-        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Codex, id_b);
+        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Codex, id_b).unwrap();
         codex(&arquivo_b, "acc-b", "b@x.com");
         let chave_a = listar(&dir, Provedor::Codex)[0].chave.clone();
 
@@ -515,7 +547,7 @@ mod tests {
         let dir = pasta("sem-legado");
         claude(&claude_auth::auth_file(&dir), "org-a", "a@x.com");
         let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
-        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b);
+        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b).unwrap();
         claude(&arquivo_b, "org-b", "b@x.com");
 
         // A versao antiga clicou em "Desconectar": apagou so' o legado.
@@ -555,7 +587,7 @@ mod tests {
         let dir = pasta("reconectou");
         claude(&claude_auth::auth_file(&dir), "org-a", "a@x.com");
         let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
-        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b);
+        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b).unwrap();
         claude(&arquivo_b, "org-b", "b@x.com");
 
         // A versao antiga reconecta com a conta B: sobrescreve o legado.
@@ -572,7 +604,7 @@ mod tests {
         let dir = pasta("remover");
         claude(&claude_auth::auth_file(&dir), "org-a", "a@x.com");
         let id_b = claude_auth::identity_of("org-b", Some("b@x.com"));
-        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b);
+        let (arquivo_b, chave_b) = destino_do_login(&dir, Provedor::Claude, &id_b).unwrap();
         claude(&arquivo_b, "org-b", "b@x.com");
         let chave_a = chave_claude("org-a", "a@x.com");
         definir_apelido(&dir, &chave_a, Some("Pessoal".to_string())).unwrap();

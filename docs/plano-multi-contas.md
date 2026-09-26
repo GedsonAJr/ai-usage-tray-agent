@@ -28,6 +28,20 @@ arquivo legado ou em `contas/`, e não há mapa de ids para manter coerente com 
 antiga faz no arquivo legado. `contas.json` guarda só as preferências por chave (apelido,
 ordem dos cards).
 
+**Diretriz de design: no máximo 2 contas por provedor** (até 2 do Claude e 2 do Codex).
+É decisão de design, não limite técnico: as telas são pensadas para até dois cards por
+provedor.
+- **Backend:** a regra fica em `contas::MAX_CONTAS_POR_PROVEDOR`. `destino_do_login` recusa
+  uma conta **nova** quando o provedor já tem duas ("Remova uma para conectar outra"), mas
+  reconectar uma das duas continua valendo.
+- **Frontend:** `settings.ts` espelha o valor e, no limite, esconde "Adicionar conta" e
+  mostra o aviso.
+- **Etapas seguintes:** ficam dimensionadas por esse teto. O widget (Etapa 3) e a barra de
+  tarefas (Etapa 4) exibem no máximo 4 cards (2 por provedor), e o seletor do Dashboard
+  Codex (Etapa 5) tem no máximo 2 opções.
+- Para aumentar no futuro, basta mudar a constante nos dois lugares e revisar o layout
+  dessas telas.
+
 **Pendências do README para o fechamento:** a seção "Uso atual" (cita `set_providers_order`
 e um card por provedor), a aba de contas das Configurações e os arquivos novos em
 `%APPDATA%` (`contas/`, `contas.json`).
@@ -178,12 +192,16 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
   ícone por `provedor`.
 - Rótulo: nome do provedor se só uma conta dele estiver visível, senão o rótulo da conta.
 - Aba Widget: caixa de marcar por conta.
+- Com o limite de 2 por provedor, são no máximo 4 cards. O layout é dimensionado para
+  esse teto.
 
 ### Etapa 4: Barra de tarefas escolhe as contas
 - `mostraNaBarra` por conta. Se ausente, herda `providers.*.mostraNaTaskbarWindows`.
 - `taskbar_widget.rs`: `SLOTS` vira `Vec` dinâmico com `set_slots(...)`. A janela guarda a
   chave, não o índice. `KEY_COLORS` vira mapa. Mesma regra de rótulo.
 - Aba Barra: caixa de marcar por conta. Testar no Windows (`cfg(windows)`).
+- Com o limite de 2 por provedor, são no máximo 4 slots. Conferir se cabem na barra com o
+  rótulo da conta.
 
 ### Etapa 5: Dashboard Codex com seletor de conta
 - `get_codex_stats(conta, …)`, com o padrão na principal. Atualizar a allowlist do

@@ -3954,7 +3954,7 @@ fn salvar_login_claude(
 ) -> Result<Value, String> {
     let identidade = claude_auth::identity_of(organization_id, email.as_deref());
     let (arquivo, chave) =
-        contas::destino_do_login(&paths.config_dir, Provedor::Claude, &identidade);
+        contas::destino_do_login(&paths.config_dir, Provedor::Claude, &identidade)?;
     let mut status = claude_auth::store(&arquivo, session_key, organization_id, email)?;
     status["chave"] = json!(chave);
     Ok(status)
@@ -4183,7 +4183,7 @@ async fn codex_login(app: AppHandle) -> Result<Value, String> {
         let outra_conta = !contas::listar(&paths.config_dir, Provedor::Codex).is_empty();
         let login = codex_auth::login(&http_client(), outra_conta)?;
         let (arquivo, chave) =
-            contas::destino_do_login(&paths.config_dir, Provedor::Codex, &login.identity());
+            contas::destino_do_login(&paths.config_dir, Provedor::Codex, &login.identity())?;
         let mut status = codex_auth::save_login(&arquivo, &login)?;
         status["chave"] = json!(chave);
         Ok(status)
@@ -4298,7 +4298,8 @@ mod tests {
         let dir = pasta_de_teste("alvos");
         for (org, email) in [("org-a", "a@x.com"), ("org-b", "b@x.com")] {
             let identidade = claude_auth::identity_of(org, Some(email));
-            let (arquivo, _) = contas::destino_do_login(&dir, Provedor::Claude, &identidade);
+            let (arquivo, _) =
+                contas::destino_do_login(&dir, Provedor::Claude, &identidade).unwrap();
             claude_auth::store(&arquivo, "sk", org, Some(email.to_string())).unwrap();
         }
         let config = AppConfig::default();
