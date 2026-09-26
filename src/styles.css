@@ -298,6 +298,7 @@ svg text { fill: #9a968d; font-size: 11px; }
 .ubadge.muted { color: #807c74; }
 .ubadge.err { color: #e0816f; border-color: #5a3a33; background: #2a1f1c; }
 .uwins { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.uwins.single { grid-template-columns: 1fr; }
 .uwin { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 14px; }
 .uwin-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .uwin-label { color: #e8e6e1; font-size: 15px; font-weight: 600; letter-spacing: .2px; }

@@ -218,7 +218,9 @@ numa linha só, separados por um ponto, com o que não couber cortado por
 reticências. Na janela semanal a data vira **"hoje"** ou **"amanhã"** quando o
 reset cai num desses dias (a conta é por virada de meia-noite, não por 24h). O
 subtítulo da página traz o **"Atualizado há Xs"** do dado em cache (sobe ao vivo
-e zera a cada nova coleta). Os dados vêm do comando `get_usage` (lê o mesmo
+e zera a cada nova coleta). Se um provedor informa só uma das janelas (ex.: o
+Codex só com o semanal), o bloco vazio é omitido e a outra ocupa o card inteiro.
+Os dados vêm do comando `get_usage` (lê o mesmo
 snapshot do tray/barra, sem rede).
 
 Abaixo de cada janela há um **mini gráfico de linha** com a evolução da

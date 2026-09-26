@@ -83,6 +83,7 @@ function windowBlock(
   timeOnly: boolean,
   series: HistPoint[],
   key: string,
+  wide = false,
 ): string {
   if (pct === undefined || pct === null) {
     return `<div class="uwin">
@@ -109,7 +110,7 @@ function windowBlock(
   return `<div class="uwin">
     <div class="uwin-top"><span class="uwin-label">${label}</span><span class="uwin-pct">${pctText(pct)}%</span></div>
     <div class="ubar"><div class="ubar-fill" style="width:${width}%;background:${barColor(pct)}"></div></div>
-    ${sparkline(series, barColor(pct), key, label)}
+    ${sparkline(series, barColor(pct), key, label, wide)}
     <div class="uwin-reset">${reset}</div>
   </div>`;
 }
@@ -118,6 +119,10 @@ function windowBlock(
 // CSS (width:100%; height:auto), então as coordenadas abaixo são as usadas tanto
 // para desenhar quanto para o hover (que mapeia o cursor por getBoundingClientRect).
 const SPARK = { W: 300, H: 64, padY: 6, padL: 22 };
+/// Largura do viewBox quando a janela ocupa o card inteiro (`.uwins.single`): ~o
+/// dobro das duas colunas + o vão, para o gráfico manter a altura da meia coluna
+/// em vez de crescer junto com a largura.
+const SPARK_WIDE_W = 614;
 
 /// Rótulo do início da série (ponta esquerda do gráfico): quão atrás está o ponto
 /// mais antigo, em relação a agora. Compacto: "-40min", "-4h", "-4h20min". Cresce
@@ -134,11 +139,12 @@ function spanLabel(iso: string): string {
 /// Registra as coordenadas em `CHARTS[key]` (para o hover) e devolve o HTML do
 /// SVG. `accent` colore a linha/área (segue a cor da barra do bloco). Com menos de
 /// dois pontos, mostra um aviso de "coletando" no lugar do gráfico.
-function sparkline(series: HistPoint[], accent: string, key: string, label: string): string {
+function sparkline(series: HistPoint[], accent: string, key: string, label: string, wide = false): string {
   if (series.length < 2) {
     return `<div class="uchart-na">Coletando histórico… (aparece após algumas coletas)</div>`;
   }
-  const { W, H, padY, padL } = SPARK;
+  const { H, padY, padL } = SPARK;
+  const W = wide ? SPARK_WIDE_W : SPARK.W;
   const ih = H - padY * 2;
   const plotW = W - padL;
   const t0 = new Date(series[0].t).getTime();
@@ -200,10 +206,17 @@ function renderProvider(label: string, provKey: "claude" | "codex", prov: Provid
   }
   // O "atualizado há…" foi para o subtítulo da página (renderSub); o card não o repete.
   const hist = DATA?.history?.[provKey];
+  const hasSession = m.uso_percentual !== undefined && m.uso_percentual !== null;
+  const hasWeekly = m.uso_percentual_7d !== undefined && m.uso_percentual_7d !== null;
+  // Só uma janela com dado (ex.: o Codex deixou de expor a sessão): o bloco vazio
+  // some e o que tem dado ocupa o card inteiro. Sem nenhuma, mantém os dois "—".
+  const single = hasSession !== hasWeekly;
+  const session = windowBlock("Sessão", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session", single);
+  const weekly = windowBlock("Semanal", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly", single);
+  const wins = !single ? session + weekly : hasSession ? session : weekly;
   return `${open("uprov")}${head("")}
-    <div class="uwins">
-      ${windowBlock("Sessão (5h)", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session")}
-      ${windowBlock("Semanal (7d)", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly")}
+    <div class="uwins${single ? " single" : ""}">
+      ${wins}
     </div>
   </div>`;
 }
@@ -285,7 +298,7 @@ function wireCharts(): void {
       const rect = svg.getBoundingClientRect();
       // Cursor → x em unidades do viewBox; acha o ponto mais próximo por |x| (a
       // área de plotagem começa após a régua Y, então comparar por x é o correto).
-      const ux = rect.width ? ((e.clientX - rect.left) / rect.width) * SPARK.W : 0;
+      const ux = rect.width ? ((e.clientX - rect.left) / rect.width) * svg.viewBox.baseVal.width : 0;
       let i = 0;
       let best = Infinity;
       for (let k = 0; k < info.pts.length; k++) {
