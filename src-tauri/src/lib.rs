@@ -3830,6 +3830,12 @@ async fn claude_login(app: AppHandle) -> Result<Value, String> {
             .title("Entrar no Claude")
             .inner_size(480.0, 780.0)
             .center()
+            // "Continuar com Google/Apple" abre um popup (`window.open`) que devolve o
+            // resultado para a pagina. Sem este tratador, o wry descarta o popup em
+            // silencio (`SetHandled(true)` sem janela) e a claude.ai mostra "Ocorreu
+            // um erro ao fazer login". `Allow` deixa o WebView2 abrir o popup dele,
+            // ligado a' pagina que o abriu.
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)
             .build()
         {
             Ok(window) => window,

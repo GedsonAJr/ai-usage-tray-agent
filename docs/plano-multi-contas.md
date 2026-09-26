@@ -46,6 +46,15 @@ provedor.
 e um card por provedor), a aba de contas das Configurações e os arquivos novos em
 `%APPDATA%` (`contas/`, `contas.json`).
 
+**Correção avulsa feita na branch: login do Claude com Google.** A janela de login não
+tratava `window.open`, e o wry descartava o popup do "Continuar com Google" em silêncio; a
+claude.ai mostrava "Ocorreu um erro ao fazer login". Agora `on_new_window` → `Allow`.
+Validado com o app rodando. Não tem relação com várias contas, então pode virar um PR
+próprio se for preciso lançar antes. No fechamento:
+- README: tirar o "login por SSO/Google pode não funcionar" (seção de limitações do
+  Claude);
+- CHANGELOG: entrada em "Corrigido".
+
 ## Context
 Hoje cada provedor tem **exatamente uma conta**. O login grava um arquivo fixo no config_dir:
 `claude-auth.json` (`src-tauri/src/claude_auth.rs:47`) e `codex-auth.json`
