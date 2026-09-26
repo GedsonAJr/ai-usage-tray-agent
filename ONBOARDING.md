@@ -168,10 +168,12 @@ primeiro formate o que existe.
   nunca carrega (tela em branco). Isso causou um bug do OTA (janela de novidades em branco
   ao abrir pela tela "Sobre").
 - **API de uso do Codex:** os dados de analytics vêm do backend `chatgpt.com/backend-api/wham/...`
-  e abrem direto com o token do `~/.codex/auth.json`
+  e abrem direto com o token do `codex-auth.json` (login pelo navegador, gerenciado pelo
+  app — mesmo formato do `~/.codex/auth.json` do CLI)
   (`Authorization: Bearer <access_token>` + `chatgpt-account-id: <account_id>`). O namespace
   `wham/` funciona; o `codex/...` dá 403. O `access_token` expira (~10 dias) — **releia o
-  `auth.json` a cada coleta** para pegar o token renovado. Endpoints principais:
+  arquivo a cada coleta** (via `codex_auth::ensure_fresh`, que renova) para pegar o token
+  atual. Endpoints principais:
   `wham/usage` (gauges) e `wham/usage/daily-token-usage-breakdown` (série temporal; unidade
   em **percentual**, não tokens).
 

@@ -36,8 +36,8 @@ e as armadilhas técnicas já aprendidas. Para arquitetura e telas, veja o
   `claude.cmd` do npm corrompe o argumento (`{"effortLevel":"low"}` vira
   `{"effortLevel:low}` colado no próximo). Use caminho de arquivo, que passa intacto.
 - **API de uso do Codex**: dados vêm de `chatgpt.com/backend-api/wham/...` com o
-  token do `~/.codex/auth.json`; releia o `auth.json` a cada coleta (o token
-  expira). O namespace `wham/` funciona; `codex/...` dá 403.
+  token do `codex-auth.json` (login pelo navegador, gerenciado pelo app); releia o
+  arquivo a cada coleta via `codex_auth::ensure_fresh` (o token expira e é renovado). O namespace `wham/` funciona; `codex/...` dá 403.
 
 ## Verificação local antes de commitar
 

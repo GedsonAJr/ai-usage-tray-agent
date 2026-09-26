@@ -308,11 +308,6 @@ struct CodexConfig {
     /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
     /// widget da barra so existe no Windows.
     mostra_na_taskbar_windows: bool,
-    auth_json_path: String,
-    /// Modo de autenticacao do Codex: "arquivo" (padrao; usa `auth_json_path`) ou
-    /// "navegador" (login OAuth pelo navegador; tokens no arquivo gerenciado
-    /// `codex-auth.json`, ver `codex_auth`). Valores desconhecidos = "arquivo".
-    auth_mode: String,
 }
 
 impl Default for CodexConfig {
@@ -320,8 +315,6 @@ impl Default for CodexConfig {
         Self {
             habilitado: true,
             mostra_na_taskbar_windows: true,
-            auth_json_path: String::new(),
-            auth_mode: "arquivo".to_string(),
         }
     }
 }
@@ -334,12 +327,6 @@ struct ClaudeConfig {
     /// Em outros sistemas operacionais o campo e lido mas ignorado, pois o
     /// widget da barra so existe no Windows.
     mostra_na_taskbar_windows: bool,
-    organization_id: String,
-    cookie: String,
-    /// Modo de autenticacao do Claude: "manual" (padrao; usa `organization_id` +
-    /// `cookie`) ou "navegador" (login pelo navegador; sessao + org no arquivo
-    /// gerenciado `claude-auth.json`, ver `claude_auth`). Desconhecido = "manual".
-    auth_mode: String,
     /// Reabertura automatica da janela de sessao (5h). Ver `SessaoAutoConfig`.
     sessao_auto: SessaoAutoConfig,
 }
@@ -349,9 +336,6 @@ impl Default for ClaudeConfig {
         Self {
             habilitado: true,
             mostra_na_taskbar_windows: true,
-            organization_id: String::new(),
-            cookie: String::new(),
-            auth_mode: "manual".to_string(),
             sessao_auto: SessaoAutoConfig::default(),
         }
     }
@@ -747,11 +731,11 @@ pub fn run() {
             codex_auth_status,
             codex_logout,
             codex_login_cancel,
-            pick_codex_auth_file,
             claude_login,
             claude_auth_status,
             claude_logout,
             claude_login_cancel,
+            claude_login_orgs,
             claude_select_org
         ])
         .setup(|app| {
@@ -1063,8 +1047,8 @@ async fn get_codex_stats(
     .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
 
-/// Coleta o historico de uso do Codex (rede): le' o `auth_json_path` do config e
-/// delega para `codex_dashboard::collect` com o cliente HTTP compartilhado.
+/// Coleta o historico de uso do Codex (rede): resolve o `auth.json` do login pelo
+/// navegador e delega para `codex_dashboard::collect` com o cliente HTTP compartilhado.
 /// Compartilhado pelo comando nativo `get_codex_stats` e pelo handler HTTP, que
 /// antes duplicavam esta logica.
 pub(crate) fn collect_codex_stats(
@@ -1073,9 +1057,8 @@ pub(crate) fn collect_codex_stats(
     start: Option<String>,
     end: Option<String>,
 ) -> Value {
-    let config = read_config(paths);
     let client = http_client();
-    let auth_path = match resolve_codex_auth_file(&client, &config, paths) {
+    let auth_path = match resolve_codex_auth_file(&client, paths) {
         Ok(path) => path,
         Err(error) => return json!({ "error": error }),
     };
@@ -1330,27 +1313,6 @@ async fn pick_widget_background(app: AppHandle) -> Option<String> {
                 "Imagens e GIFs",
                 &["png", "jpg", "jpeg", "gif", "webp", "bmp"],
             )
-            .blocking_pick_file()
-            .and_then(|file| file.into_path().ok())
-            .map(|path| path.to_string_lossy().to_string())
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-/// Abre o seletor de arquivo nativo para escolher o `auth.json` do Codex (modo de
-/// autenticacao por arquivo). Devolve o caminho, ou `None` se o usuario cancelar.
-/// `async` pelo mesmo motivo de `pick_widget_background` (evitar loop modal na main
-/// thread e travar o event loop/tray).
-#[tauri::command]
-async fn pick_codex_auth_file(app: AppHandle) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri_plugin_dialog::DialogExt;
-        app.dialog()
-            .file()
-            .add_filter("auth.json", &["json"])
-            .add_filter("Todos os arquivos", &["*"])
             .blocking_pick_file()
             .and_then(|file| file.into_path().ok())
             .map(|path| path.to_string_lossy().to_string())
@@ -2486,24 +2448,11 @@ fn handle_collected<R: Runtime>(
     }
 }
 
-/// Resolve o arquivo de credenciais do Codex conforme o modo de autenticacao:
-/// "navegador" usa o arquivo gerenciado (`codex_auth`), renovando o token se
-/// preciso; qualquer outro valor usa o caminho do `auth.json` informado pelo
-/// usuario. Devolve o caminho pronto para os leitores (coleta e dashboard).
-fn resolve_codex_auth_file(
-    client: &Client,
-    config: &AppConfig,
-    paths: &RuntimePaths,
-) -> Result<PathBuf, String> {
-    if config.providers.codex.auth_mode == "navegador" {
-        codex_auth::ensure_fresh(client, &paths.config_dir)
-    } else {
-        let path = config.providers.codex.auth_json_path.trim();
-        if path.is_empty() {
-            return Err("Caminho do auth.json do Codex nao configurado.".to_string());
-        }
-        Ok(PathBuf::from(path))
-    }
+/// Resolve o arquivo de credenciais do Codex: o arquivo gerenciado do login pelo
+/// navegador (`codex_auth`), renovando o token se preciso. Devolve o caminho pronto
+/// para os leitores (coleta e dashboard).
+fn resolve_codex_auth_file(client: &Client, paths: &RuntimePaths) -> Result<PathBuf, String> {
+    codex_auth::ensure_fresh(client, &paths.config_dir)
 }
 
 fn collect_codex_metric(
@@ -2511,7 +2460,7 @@ fn collect_codex_metric(
     config: &AppConfig,
     paths: &RuntimePaths,
 ) -> Result<UsageMetric, String> {
-    let auth_path = resolve_codex_auth_file(client, config, paths)?;
+    let auth_path = resolve_codex_auth_file(client, paths)?;
 
     let auth_raw = fs::read_to_string(&auth_path)
         .map_err(|error| format!("Falha ao ler auth.json do Codex: {error}"))?;
@@ -2621,34 +2570,13 @@ fn collect_codex_metric(
     })
 }
 
-/// Resolve as credenciais do Claude conforme o modo de autenticacao: "navegador"
-/// usa a sessao capturada (arquivo gerenciado `claude_auth`); qualquer outro valor
-/// usa `organization_id` + `cookie` do config. Devolve `(cookie_header, org_id)`.
-fn resolve_claude_credentials(
-    config: &AppConfig,
-    paths: &RuntimePaths,
-) -> Result<(String, String), String> {
-    if config.providers.claude.auth_mode == "navegador" {
-        claude_auth::credentials(&paths.config_dir)
-    } else {
-        let organization_id = config.providers.claude.organization_id.trim();
-        let cookie = config.providers.claude.cookie.trim();
-        if organization_id.is_empty() {
-            return Err("Organization ID do Claude nao configurado.".to_string());
-        }
-        if cookie.is_empty() {
-            return Err("Cookie do Claude nao configurado.".to_string());
-        }
-        Ok((cookie.to_string(), organization_id.to_string()))
-    }
-}
-
 fn collect_claude_metric(
     client: &Client,
     config: &AppConfig,
     paths: &RuntimePaths,
 ) -> Result<UsageMetric, String> {
-    let (cookie, organization_id) = resolve_claude_credentials(config, paths)?;
+    // Sessao capturada pelo login pelo navegador (arquivo gerenciado `claude_auth`).
+    let (cookie, organization_id) = claude_auth::credentials(&paths.config_dir)?;
 
     let response = client
         .get(format!(
@@ -2664,19 +2592,15 @@ fn collect_claude_metric(
         .send()
         .map_err(|error| format!("Falha HTTP ao consultar Claude: {error}"))?;
 
-    // No modo navegador, um 401/403 significa sessao web expirada/rejeitada (nao ha
-    // refresh_token): marca para a UI oferecer "Reconectar"; sucesso limpa a marca.
-    if config.providers.claude.auth_mode == "navegador" {
-        let code = response.status().as_u16();
-        if code == 401 || code == 403 {
-            claude_auth::set_needs_reconnect(&paths.config_dir, true);
-            // Mesma mensagem exibida na aba Claude das Configuracoes (reconexao).
-            return Err(
-                "Sessão expirada. Reconecte sua conta para continuar a coleta.".to_string(),
-            );
-        } else if response.status().is_success() {
-            claude_auth::set_needs_reconnect(&paths.config_dir, false);
-        }
+    // Um 401/403 significa sessao web expirada/rejeitada (nao ha refresh_token):
+    // marca para a UI oferecer "Reconectar"; sucesso limpa a marca.
+    let code = response.status().as_u16();
+    if code == 401 || code == 403 {
+        claude_auth::set_needs_reconnect(&paths.config_dir, true);
+        // Mesma mensagem exibida na aba Claude das Configuracoes (reconexao).
+        return Err("Sessão expirada. Reconecte sua conta para continuar a coleta.".to_string());
+    } else if response.status().is_success() {
+        claude_auth::set_needs_reconnect(&paths.config_dir, false);
     }
 
     if !response.status().is_success() {
@@ -3742,8 +3666,9 @@ fn open_external(url: String) -> Result<(), String> {
 
 /// Login do Claude pelo navegador: abre `claude.ai/login` numa janela propria,
 /// aguarda o usuario logar e captura o cookie de sessao (`sessionKey`, httpOnly) via
-/// `cookies_for_url`; depois descobre o `organization_id` e guarda tudo no arquivo
-/// gerenciado. `async` porque criar a WebviewWindow num comando sincrono trava o
+/// `cookies_for_url`; depois descobre o `organization_id` (com mais de uma org, a
+/// escolha acontece na propria janela, ver `show_claude_org_picker`) e guarda tudo no
+/// arquivo gerenciado. Devolve o status do login. `async` porque criar a WebviewWindow num comando sincrono trava o
 /// event loop (janela em branco); a leitura de cookie roda em `spawn_blocking`
 /// porque no Windows ela deadlocka se chamada na main thread.
 #[tauri::command]
@@ -3821,7 +3746,17 @@ fn capture_claude_login(
             let _ = window.close();
             return Err("Tempo limite aguardando o login do Claude.".to_string());
         }
-        if let Ok(cookies) = window.cookies_for_url(claude_url.clone()) {
+        // Se o usuario fechar a janela entre a checagem acima e esta chamada, o Tauri
+        // da' panic por dentro (`rx.recv().unwrap()` no tauri-runtime-wry, com o
+        // webview ja' destruido). Sem o catch_unwind, a task morria e a UI mostrava
+        // "task N panicked ... RecvError" em vez de "Login cancelado.".
+        let cookies = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            window.cookies_for_url(claude_url.clone())
+        })) {
+            Ok(result) => result,
+            Err(_) => return Err("Login cancelado.".to_string()),
+        };
+        if let Ok(cookies) = cookies {
             if let Some(value) = cookies
                 .iter()
                 .find(|cookie| cookie.name() == "sessionKey")
@@ -3834,41 +3769,103 @@ fn capture_claude_login(
         thread::sleep(Duration::from_millis(1000));
     };
 
-    let _ = window.close();
     let client = http_client();
-    let orgs = claude_auth::fetch_chat_organizations(&client, &session_key)?;
+    let orgs = match claude_auth::fetch_chat_organizations(&client, &session_key) {
+        Ok(orgs) => orgs,
+        Err(error) => {
+            let _ = window.close();
+            return Err(error);
+        }
+    };
 
     match orgs.as_slice() {
-        [] => Err("Nenhuma organização encontrada na conta do Claude.".to_string()),
+        [] => {
+            let _ = window.close();
+            Err("Nenhuma organização encontrada na conta do Claude.".to_string())
+        }
         // Uma unica org: nada a escolher, salva direto (comportamento de sempre).
         [org] => {
+            let _ = window.close();
             let email = claude_auth::fetch_email(&client, &session_key);
-            let status = claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)?;
-            Ok(json!({ "needsSelection": false, "status": status }))
+            claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)
         }
-        // Varias orgs com "chat": guarda a sessao e devolve as candidatas (com o uso
-        // atual de cada uma) para o usuario escolher; a coleta e' por org e escolher a
-        // errada faz o app reportar 0% (ex.: org pessoal antiga vs. org de time usada).
+        // Varias orgs com "chat": a coleta e' por org e escolher a errada faz o app
+        // reportar 0% (ex.: org pessoal antiga vs. org de time usada). A propria janela
+        // de login passa a mostrar a escolha (`claude-org.html`) e o login so' termina
+        // quando o usuario confirma (`claude_select_org`, que fecha a janela) ou desiste.
         _ => {
-            claude_auth::set_pending_session(&session_key);
-            let email = claude_auth::fetch_email(&client, &session_key);
-            let candidates: Vec<Value> = orgs
-                .iter()
-                .map(|org| {
-                    json!({
-                        "uuid": org.uuid,
-                        "name": org.name,
-                        "utilization": claude_org_utilization(&client, &session_key, &org.uuid),
-                    })
-                })
-                .collect();
-            Ok(json!({
-                "needsSelection": true,
-                "email": email,
-                "organizations": candidates,
-            }))
+            claude_auth::set_pending_login(claude_auth::PendingLogin { session_key, orgs });
+            show_claude_org_picker(app, window);
+            wait_claude_org_choice(app, window, paths, cancel_flag)
         }
     }
+}
+
+/// Navega a janela de login (que estava na claude.ai) para a pagina local de escolha
+/// da org, na mesma origem da janela principal (dev: localhost:1420; build:
+/// tauri.localhost) — so' assim a pagina tem IPC (a capability cobre a origem local).
+fn show_claude_org_picker(app: &AppHandle, window: &WebviewWindow) {
+    let base = app
+        .get_webview_window("main")
+        .and_then(|main| main.url().ok())
+        .or_else(|| app.config().build.dev_url.clone());
+    if let Some(url) = base.and_then(|base| base.join("claude-org.html").ok()) {
+        let _ = window.set_title("Escolha a organização");
+        let _ = window.navigate(url);
+    }
+}
+
+/// Espera a escolha da org na janela de login. `claude_select_org` consome o login
+/// pendente e fecha a janela; se ela fechar com o login ainda pendente, o usuario
+/// desistiu. Devolve o status gravado, ou "Login cancelado.".
+fn wait_claude_org_choice(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    paths: &RuntimePaths,
+    cancel_flag: &AtomicBool,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + Duration::from_secs(5 * 60);
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) || Instant::now() >= deadline {
+            let _ = window.close();
+            claude_auth::take_pending_login();
+            return Err("Login cancelado.".to_string());
+        }
+        if app.get_webview_window("claude-login").is_none() {
+            return match claude_auth::take_pending_login() {
+                Some(_) => Err("Login cancelado.".to_string()),
+                None => Ok(claude_auth::status(&paths.config_dir)),
+            };
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+}
+
+/// Orgs candidatas do login pendente, com o uso atual (5h) de cada uma para ajudar a
+/// identificar a certa. Chamado pela pagina de escolha (`claude-org.html`). `async`
+/// + `spawn_blocking`: consulta o uso de cada org na rede.
+#[tauri::command]
+async fn claude_login_orgs() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let pending = claude_auth::peek_pending_login()
+            .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
+        let client = http_client();
+        let email = claude_auth::fetch_email(&client, &pending.session_key);
+        let organizations: Vec<Value> = pending
+            .orgs
+            .iter()
+            .map(|org| {
+                json!({
+                    "uuid": org.uuid,
+                    "name": org.name,
+                    "utilization": claude_org_utilization(&client, &pending.session_key, &org.uuid),
+                })
+            })
+            .collect();
+        Ok(json!({ "email": email, "organizations": organizations }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Uso da janela de 5h (0..100) de uma org, para ajudar o usuario a identificar a org
@@ -3920,23 +3917,38 @@ fn claude_login_cancel() {
     claude_auth::cancel();
 }
 
-/// Grava a org escolhida pelo usuario quando o login pelo navegador encontrou mais de
-/// uma org com "chat" (ver `capture_claude_login`). Usa a sessao pendente capturada no
-/// login; devolve o status para a UI. Erro se a sessao pendente expirou (novo login).
+/// Grava a org escolhida na pagina de escolha (`claude-org.html`), quando o login pelo
+/// navegador encontrou mais de uma org com "chat" (ver `capture_claude_login`). Usa o
+/// login pendente e, gravado, fecha a janela de login — o que conclui o `claude_login`
+/// que a aba Claude esta' aguardando. Erro se o login pendente expirou (novo login).
 #[tauri::command]
-fn claude_select_org(
-    paths: State<'_, RuntimePaths>,
-    organization_id: String,
-) -> Result<Value, String> {
-    let session_key = claude_auth::take_pending_session()
-        .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
-    let organization_id = organization_id.trim();
+async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Value, String> {
+    let organization_id = organization_id.trim().to_string();
     if organization_id.is_empty() {
         return Err("Nenhuma organização selecionada.".to_string());
     }
-    let client = http_client();
-    let email = claude_auth::fetch_email(&client, &session_key);
-    claude_auth::store(&paths.config_dir, &session_key, organization_id, email)
+    let paths = app.state::<RuntimePaths>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pending = claude_auth::take_pending_login()
+            .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
+        let client = http_client();
+        let email = claude_auth::fetch_email(&client, &pending.session_key);
+        match claude_auth::store(&paths.config_dir, &pending.session_key, &organization_id, email) {
+            Ok(status) => {
+                if let Some(window) = app.get_webview_window("claude-login") {
+                    let _ = window.close();
+                }
+                Ok(status)
+            }
+            Err(error) => {
+                // Devolve o login pendente para o usuario poder tentar de novo.
+                claude_auth::set_pending_login(pending);
+                Err(error)
+            }
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Login do Codex pelo navegador (OAuth + PKCE), alternativa ao caminho do

@@ -7,8 +7,6 @@ import { animaTrocaDeAba } from "./anima";
 interface CodexConfig {
   habilitado: boolean;
   mostraNaTaskbarWindows: boolean;
-  authJsonPath: string;
-  authMode: string;
 }
 interface SessaoAutoConfig {
   habilitado: boolean;
@@ -22,9 +20,6 @@ interface SessaoAutoConfig {
 interface ClaudeConfig {
   habilitado: boolean;
   mostraNaTaskbarWindows: boolean;
-  organizationId: string;
-  cookie: string;
-  authMode: string;
   sessaoAuto: SessaoAutoConfig;
 }
 interface BarraConfig {
@@ -104,16 +99,9 @@ function fillForm(data: SettingsData): void {
   $<HTMLInputElement>("set-lokiUrl").value = c.loki?.url ?? "";
 
   $<HTMLInputElement>("set-codexHab").checked = codex.habilitado !== false;
-  $<HTMLInputElement>("set-codexAuth").value = codex.authJsonPath ?? "";
-  setRadio("codexAuthMode", codex.authMode === "navegador" ? "navegador" : "arquivo");
-  syncCodexAuthMode();
   $<HTMLInputElement>("set-codexTaskbar").checked = codex.mostraNaTaskbarWindows !== false;
 
   $<HTMLInputElement>("set-claudeHab").checked = claude.habilitado !== false;
-  $<HTMLInputElement>("set-claudeOrg").value = claude.organizationId ?? "";
-  $<HTMLInputElement>("set-claudeCookie").value = claude.cookie ?? "";
-  setRadio("claudeAuthMode", claude.authMode === "navegador" ? "navegador" : "manual");
-  syncClaudeAuthMode();
   $<HTMLInputElement>("set-claudeTaskbar").checked = claude.mostraNaTaskbarWindows !== false;
   // Guarda o caminho do CLI (editável só pelo config.json) para devolvê-lo no save
   // — o painel manda o bloco `providers` inteiro, então omitir zeraria o valor.
@@ -173,15 +161,10 @@ function collect(): SaveSettings {
       codex: {
         habilitado: $<HTMLInputElement>("set-codexHab").checked,
         mostraNaTaskbarWindows: $<HTMLInputElement>("set-codexTaskbar").checked,
-        authJsonPath: $<HTMLInputElement>("set-codexAuth").value.trim(),
-        authMode: codexAuthMode(),
       },
       claude: {
         habilitado: $<HTMLInputElement>("set-claudeHab").checked,
         mostraNaTaskbarWindows: $<HTMLInputElement>("set-claudeTaskbar").checked,
-        organizationId: $<HTMLInputElement>("set-claudeOrg").value.trim(),
-        cookie: $<HTMLInputElement>("set-claudeCookie").value.trim(),
-        authMode: claudeAuthMode(),
         sessaoAuto: {
           habilitado: $<HTMLInputElement>("set-claudeSessaoAuto").checked,
           modo: sessaoAutoModo(),
@@ -270,22 +253,6 @@ async function pickBackground(): Promise<void> {
     const path = await invoke<string | null>("pick_widget_background");
     if (path) {
       $<HTMLInputElement>("set-wdgFundo").value = path;
-      scheduleAutoSave();
-    }
-  } catch (e) {
-    setMsg("Falha ao escolher arquivo: " + (e instanceof Error ? e.message : String(e)), "err");
-  }
-}
-
-/// Abre o seletor de arquivo nativo para escolher o auth.json do Codex e joga o
-/// caminho no campo. Como o campo é alterado por código (não dispara "input"),
-/// atualiza os avisos e agenda o auto-save explicitamente.
-async function pickCodexAuthFile(): Promise<void> {
-  try {
-    const path = await invoke<string | null>("pick_codex_auth_file");
-    if (path) {
-      $<HTMLInputElement>("set-codexAuth").value = path;
-      syncProviderHints();
       scheduleAutoSave();
     }
   } catch (e) {
@@ -383,9 +350,8 @@ async function setEnvioProvider(ferramenta: "codex" | "claude", enviar: boolean)
   }
 }
 
-// Autenticação do Codex: o modo ("arquivo" | "navegador") é parte do config.json
-// (auto-save), mas o login/logout pelo navegador é feito à parte, via os comandos
-// codex_login/codex_logout, e o status vem de codex_auth_status.
+// Autenticação do Codex: só pelo navegador (OAuth), feito à parte do config.json
+// pelos comandos codex_login/codex_logout; o status vem de codex_auth_status.
 interface CodexAuthStatus {
   connected: boolean;
   needsReconnect: boolean;
@@ -396,16 +362,6 @@ interface CodexAuthStatus {
 let codexConnected = false;
 // Enquanto true, o auto-refresh não relê o status (não atropela o "Aguardando…").
 let codexLoginInProgress = false;
-
-/// Mostra a seção do modo escolhido (caminho do auth.json ou login pelo navegador).
-function codexAuthMode(): "arquivo" | "navegador" {
-  return radioValue("codexAuthMode") === "navegador" ? "navegador" : "arquivo";
-}
-function syncCodexAuthMode(): void {
-  const mode = codexAuthMode();
-  ($("set-codexFileAuth") as HTMLElement).hidden = mode !== "arquivo";
-  ($("set-codexBrowserAuth") as HTMLElement).hidden = mode !== "navegador";
-}
 
 /// Reflete o status do login pelo navegador na UI (texto, botões) e nos avisos.
 /// - Conectado e saudável: só status + Desconectar (sem botão de conectar).
@@ -500,48 +456,21 @@ async function codexLogout(): Promise<void> {
   }
 }
 
-// Autenticação do Claude: o modo ("manual" | "navegador") é parte do config.json
-// (auto-save); o login/logout pelo navegador é feito à parte, pelos comandos
-// claude_login/claude_logout, e o status vem de claude_auth_status.
+// Autenticação do Claude: só pelo navegador, feito à parte do config.json pelos
+// comandos claude_login/claude_logout; o status vem de claude_auth_status.
 interface ClaudeAuthStatus {
   connected: boolean;
   needsReconnect: boolean;
   email: string | null;
   organizationId: string | null;
 }
-// Uma org candidata quando a conta tem mais de uma com "chat" (o backend pede escolha).
-interface ClaudeOrgCandidate {
-  uuid: string;
-  name: string | null;
-  utilization: number | null;
-}
-// Retorno do claude_login: ou já conectou (status), ou precisa escolher a org.
-interface ClaudeLoginResult {
-  needsSelection: boolean;
-  status?: ClaudeAuthStatus;
-  email?: string | null;
-  organizations?: ClaudeOrgCandidate[];
-}
 // Último status conhecido do login pelo navegador; usado nos avisos "sem credenciais".
 let claudeConnected = false;
 // Enquanto true, o auto-refresh não relê o status (não atropela o "Aguardando…").
 let claudeLoginInProgress = false;
-// Enquanto o seletor de org está aberto, o auto-refresh não relê o status.
-let claudeOrgPickerOpen = false;
-
-function claudeAuthMode(): "manual" | "navegador" {
-  return radioValue("claudeAuthMode") === "navegador" ? "navegador" : "manual";
-}
-/// Mostra a seção do modo escolhido (campos manuais ou login pelo navegador).
-function syncClaudeAuthMode(): void {
-  const mode = claudeAuthMode();
-  ($("set-claudeManualAuth") as HTMLElement).hidden = mode !== "manual";
-  ($("set-claudeBrowserAuth") as HTMLElement).hidden = mode !== "navegador";
-}
 
 /// Reflete o status do login pelo navegador na UI (texto, botões) e nos avisos.
 function applyClaudeAuthStatus(st: ClaudeAuthStatus): void {
-  hideClaudeOrgPicker();
   // Sessão que precisa reconectar conta como "sem credenciais" nos avisos.
   claudeConnected = !!st.connected && !st.needsReconnect;
   const statusEl = $("set-claudeAuthStatus");
@@ -577,75 +506,25 @@ async function loadClaudeAuthStatus(): Promise<void> {
 }
 
 /// Dispara o login pelo navegador (abre a claude.ai; o backend captura o cookie).
-/// Enquanto aguarda, esconde "Conectar" e mostra "Cancelar".
+/// Enquanto aguarda, esconde "Conectar" e mostra "Cancelar". Se a conta tiver mais
+/// de uma org, a escolha acontece na própria janela de login (claude-org.html) e o
+/// comando só volta depois dela, já com o status gravado.
 async function claudeLogin(): Promise<void> {
   const btn = $("set-claudeLogin") as HTMLElement;
   const cancelBtn = $("set-claudeLoginCancel") as HTMLElement;
   btn.hidden = true;
   cancelBtn.hidden = false;
   claudeLoginInProgress = true;
-  hideClaudeOrgPicker();
   $("set-claudeAuthStatus").textContent = "Aguardando o login no navegador…";
   try {
-    const res = await invoke<ClaudeLoginResult>("claude_login");
-    cancelBtn.hidden = true;
-    if (res.needsSelection && res.organizations && res.organizations.length) {
-      // Mantém "in progress" para o auto-refresh não sobrescrever enquanto escolhe.
-      showClaudeOrgPicker(res.organizations);
-      return;
-    }
-    if (res.status) applyClaudeAuthStatus(res.status);
+    applyClaudeAuthStatus(await invoke<ClaudeAuthStatus>("claude_login"));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (!/cancel/i.test(msg)) setMsg("Falha no login do Claude: " + msg, "err");
     await loadClaudeAuthStatus();
   } finally {
-    if (!claudeOrgPickerOpen) claudeLoginInProgress = false;
+    claudeLoginInProgress = false;
     cancelBtn.hidden = true;
-  }
-}
-
-/// Mostra o seletor de org (conta com mais de uma org "chat"), com o uso atual de cada
-/// uma para ajudar a identificar a certa. O login só conclui ao confirmar.
-function showClaudeOrgPicker(orgs: ClaudeOrgCandidate[]): void {
-  const picker = $("set-claudeOrgPicker") as HTMLElement;
-  const select = $<HTMLSelectElement>("set-claudeOrgSelect");
-  select.innerHTML = "";
-  for (const org of orgs) {
-    const opt = document.createElement("option");
-    opt.value = org.uuid;
-    const uso = org.utilization != null ? `${Math.round(org.utilization)}% (5h)` : "uso indisponível";
-    opt.textContent = `${org.name ?? org.uuid} — ${uso}`;
-    select.appendChild(opt);
-  }
-  ($("set-claudeLogin") as HTMLElement).hidden = true;
-  picker.hidden = false;
-  claudeOrgPickerOpen = true;
-  claudeLoginInProgress = true;
-  const statusEl = $("set-claudeAuthStatus");
-  statusEl.classList.remove("ok", "warn");
-  statusEl.textContent = "Selecione a organização para concluir o login.";
-}
-
-function hideClaudeOrgPicker(): void {
-  ($("set-claudeOrgPicker") as HTMLElement).hidden = true;
-  claudeOrgPickerOpen = false;
-}
-
-/// Grava a org escolhida e conclui o login pelo navegador.
-async function claudeSelectOrg(): Promise<void> {
-  const organizationId = $<HTMLSelectElement>("set-claudeOrgSelect").value;
-  if (!organizationId) return;
-  try {
-    const status = await invoke<ClaudeAuthStatus>("claude_select_org", { organizationId });
-    hideClaudeOrgPicker();
-    claudeLoginInProgress = false;
-    applyClaudeAuthStatus(status);
-  } catch (e) {
-    setMsg("Falha ao selecionar a organização: " + (e instanceof Error ? e.message : String(e)), "err");
-    hideClaudeOrgPicker();
-    claudeLoginInProgress = false;
-    await loadClaudeAuthStatus();
   }
 }
 
@@ -739,26 +618,11 @@ function setBodyEnabled(bodyId: string, on: boolean): void {
   });
 }
 
-/// Reflete o estado de cada provedor: desabilita os campos quando desligado e, se
-/// ligado, avisa que faltam os campos obrigatórios para a coleta acontecer
-/// (Codex: auth.json; Claude: organization id + cookie).
+/// Reflete o estado de cada provedor: desabilita os campos quando desligado. O
+/// estado da conexão já aparece no status do bloco de login de cada um.
 function syncProviderHints(): void {
-  const codexOn = $<HTMLInputElement>("set-codexHab").checked;
-  setBodyEnabled("set-codexBody", codexOn);
-
-  const claudeOn = $<HTMLInputElement>("set-claudeHab").checked;
-  setBodyEnabled("set-claudeBody", claudeOn);
-  // No login pelo navegador o estado já aparece no status do bloco; o aviso amarelo
-  // só é usado no modo manual (org + cookie).
-  if (claudeAuthMode() === "navegador") {
-    ($("set-claudeWarn") as HTMLElement).hidden = true;
-  } else {
-    const claudeFalta =
-      $<HTMLInputElement>("set-claudeOrg").value.trim() === "" ||
-      $<HTMLInputElement>("set-claudeCookie").value.trim() === "";
-    ($("set-claudeWarn") as HTMLElement).hidden = !(claudeOn && claudeFalta);
-  }
-
+  setBodyEnabled("set-codexBody", $<HTMLInputElement>("set-codexHab").checked);
+  setBodyEnabled("set-claudeBody", $<HTMLInputElement>("set-claudeHab").checked);
   syncProviderNotes();
 }
 
@@ -909,14 +773,9 @@ function setNotes(ids: string[], msg: string): void {
 }
 function syncProviderNotes(): void {
   const codexOn = $<HTMLInputElement>("set-codexHab").checked;
-  const codexCfg = codexAuthMode() === "navegador"
-    ? codexConnected
-    : $<HTMLInputElement>("set-codexAuth").value.trim() !== "";
+  const codexCfg = codexConnected;
   const claudeOn = $<HTMLInputElement>("set-claudeHab").checked;
-  const claudeCfg = claudeAuthMode() === "navegador"
-    ? claudeConnected
-    : $<HTMLInputElement>("set-claudeOrg").value.trim() !== "" &&
-      $<HTMLInputElement>("set-claudeCookie").value.trim() !== "";
+  const claudeCfg = claudeConnected;
   setNotes(["envio-codex-note"], providerNote(codexOn, codexCfg));
   setNotes(["envio-claude-note"], providerNote(claudeOn, claudeCfg));
   setNotes(["barra-codex-note", "wdg-codex-note"], providerNote(codexOn, codexCfg));
@@ -956,12 +815,6 @@ export function initSettings(): void {
   document.querySelectorAll(".settings-tabs button").forEach((b) =>
     b.addEventListener("click", () => activateTab((b as HTMLElement).dataset.stab ?? "geral")));
 
-  $("set-cookieToggle").addEventListener("click", () => {
-    const input = $<HTMLInputElement>("set-claudeCookie");
-    const show = input.type === "password";
-    input.type = show ? "text" : "password";
-    $("set-cookieToggle").textContent = show ? "Ocultar" : "Mostrar";
-  });
   $("set-srvPinToggle").addEventListener("click", () => {
     const input = $<HTMLInputElement>("set-srvPin");
     const show = input.type === "password";
@@ -971,22 +824,10 @@ export function initSettings(): void {
   $("set-srvHab").addEventListener("change", syncServerPinHint);
   $("set-srvPin").addEventListener("input", syncServerPinHint);
   $("set-codexHab").addEventListener("change", syncProviderHints);
-  $("set-codexAuth").addEventListener("input", syncProviderHints);
-  $("set-codexAuthMode").addEventListener("change", () => {
-    syncCodexAuthMode();
-    syncProviderHints();
-  });
-  $("set-codexAuthPick").addEventListener("click", () => void pickCodexAuthFile());
   $("set-codexLogin").addEventListener("click", () => void codexLogin());
   $("set-codexLoginCancel").addEventListener("click", () => void codexLoginCancel());
   $("set-codexLogout").addEventListener("click", () => void codexLogout());
   $("set-claudeHab").addEventListener("change", syncProviderHints);
-  $("set-claudeOrg").addEventListener("input", syncProviderHints);
-  $("set-claudeCookie").addEventListener("input", syncProviderHints);
-  $("set-claudeAuthMode").addEventListener("change", () => {
-    syncClaudeAuthMode();
-    syncProviderHints();
-  });
   $("set-claudeSessaoAuto").addEventListener("change", () => syncSessaoAuto());
   $("set-claudeSessaoAutoModo").addEventListener("change", () => syncSessaoAuto());
   $("set-claudeSessaoAutoAdd").addEventListener("click", addSessaoAutoHorario);
@@ -1002,7 +843,6 @@ export function initSettings(): void {
   $("set-claudeLogin").addEventListener("click", () => void claudeLogin());
   $("set-claudeLoginCancel").addEventListener("click", () => void claudeLoginCancel());
   $("set-claudeLogout").addEventListener("click", () => void claudeLogout());
-  $("set-claudeOrgConfirm").addEventListener("click", () => void claudeSelectOrg());
   $("set-barraCor").addEventListener("input", syncColorPicker);
   $("set-barraCorPicker").addEventListener("input", () => {
     $<HTMLInputElement>("set-barraCor").value = $<HTMLInputElement>("set-barraCorPicker").value;
@@ -1041,8 +881,8 @@ export function initSettings(): void {
   window.setInterval(() => {
     const visivel = document.getElementById("view-settings")?.classList.contains("on");
     if (!visivel) return;
-    if (codexAuthMode() === "navegador" && !codexLoginInProgress) void loadCodexAuthStatus();
-    if (claudeAuthMode() === "navegador" && !claudeLoginInProgress && !claudeOrgPickerOpen) void loadClaudeAuthStatus();
+    if (!codexLoginInProgress) void loadCodexAuthStatus();
+    if (!claudeLoginInProgress) void loadClaudeAuthStatus();
   }, 5000);
 
   void loadSettings();

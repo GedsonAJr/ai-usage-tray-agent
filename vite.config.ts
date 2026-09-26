@@ -7,15 +7,17 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
 
-  // Tres paginas: a janela principal (index.html), o widget da area de
-  // trabalho (widget.html) e a janela de novidades da atualizacao
-  // (update.html), todas empacotadas no build.
+  // Quatro paginas: a janela principal (index.html), o widget da area de
+  // trabalho (widget.html), a janela de novidades da atualizacao (update.html)
+  // e a escolha da org do Claude, aberta na janela de login (claude-org.html),
+  // todas empacotadas no build.
   build: {
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
         widget: fileURLToPath(new URL("./widget.html", import.meta.url)),
         update: fileURLToPath(new URL("./update.html", import.meta.url)),
+        claudeOrg: fileURLToPath(new URL("./claude-org.html", import.meta.url)),
       },
     },
   },

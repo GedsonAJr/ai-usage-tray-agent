@@ -29,7 +29,15 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Removido
+- Claude: removida a autenticação por campos manuais (Organization ID + Cookie) — quem usava esse modo precisa conectar a conta pelo navegador nas Configurações.
+- Codex: removida a autenticação pelo arquivo auth.json — quem usava esse modo precisa conectar a conta pelo navegador nas Configurações.
+
+### Corrigido
+- Claude: fechar a janela de login sem entrar não mostra mais um erro técnico ("task panicked… RecvError") — o login só é cancelado.
+
 ### Alterado
+- Claude: quando a conta tem mais de uma organização, a escolha aparece num modal na própria janela de login, em vez de um seletor na aba Claude das Configurações.
 - Uso atual: quando um provedor informa só uma das janelas (ex.: o Codex só com o semanal), o bloco vazio some e a janela com dado ocupa o card inteiro.
 - Uso atual: os blocos passaram a se chamar só "Sessão" e "Semanal", sem o "(5h)" e o "(7d)".
 

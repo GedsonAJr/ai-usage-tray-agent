@@ -26,8 +26,8 @@ O projeto foi feito com:
 
 Funcional, com:
 
-- Coleta real do Codex usando `auth.json` ou login pelo navegador (OAuth)
-- Coleta real do Claude usando `organizationId` e `sessionKey` (manuais) ou login pelo navegador
+- Coleta real do Codex com login pelo navegador (OAuth)
+- Coleta real do Claude com login pelo navegador (captura a sessão da claude.ai)
 - Envio para Loki sem `tenant` e sem `basic auth`
 - Janela do app com **Envio de dados**, **Uso atual**, **Dashboard Claude**, **Dashboard Codex**,
   **Configurações** (com abas e **auto-save**) e **Sobre** (versão, atualização e novidades)
@@ -70,16 +70,11 @@ Exemplo:
   "providers": {
     "codex": {
       "habilitado": true,
-      "mostraNaTaskbarWindows": true,
-      "authMode": "arquivo",
-      "authJsonPath": "C:\\Users\\usuario\\.codex\\auth.json"
+      "mostraNaTaskbarWindows": true
     },
     "claude": {
       "habilitado": true,
       "mostraNaTaskbarWindows": true,
-      "authMode": "manual",
-      "organizationId": "org_exemplo",
-      "cookie": "sessionKey=...",
       "sessaoAuto": {
         "habilitado": false,
         "modo": "automatico",
@@ -294,18 +289,16 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
 - **Envio**: `usuario` (Nome de exibição), `loki.url` e o **Enviar ao Loki** por
   provedor (`envio.codex`, `envio.claude`, como interruptores) — avisa quando o
   provedor está desativado ou sem credenciais, mas o interruptor segue operável.
-- **Codex**: `habilitado` (interruptor de destaque com o logo) e a **autenticação**
-  (`authMode`), que pode ser **Arquivo auth.json** (`authJsonPath`, caminho de um
-  `auth.json` existente — ex.: do Codex CLI) ou **Login pelo navegador** (OAuth:
-  um botão abre o navegador para você entrar na conta ChatGPT/OpenAI; os tokens
-  ficam salvos no próprio app, em `codex-auth.json`, e são renovados sozinhos).
-- **Claude**: `habilitado` (interruptor de destaque com o logo) e a **autenticação**
-  (`authMode`), que pode ser **Campos manuais** (`organizationId` + `cookie`, com
-  mostrar/ocultar) ou **Login pelo navegador** (um botão abre a claude.ai para você
-  entrar; a sessão e o Organization ID são capturados e salvos no app — em
-  `claude-auth.json` — com aviso para reconectar quando a sessão expira). Se a conta
-  tiver mais de uma organização, o app pede para escolher qual usar (mostrando o uso
-  atual de cada uma), pois a coleta é por organização. Os campos ficam esmaecidos
+- **Codex**: `habilitado` (interruptor de destaque com o logo) e o **login pelo
+  navegador** (OAuth: um botão abre o navegador para você entrar na conta
+  ChatGPT/OpenAI; os tokens ficam salvos no próprio app, em `codex-auth.json`, e são
+  renovados sozinhos).
+- **Claude**: `habilitado` (interruptor de destaque com o logo) e o **login pelo
+  navegador** (um botão abre a claude.ai para você entrar; a sessão e o Organization
+  ID são capturados e salvos no app — em `claude-auth.json` — com aviso para
+  reconectar quando a sessão expira). Se a conta
+  tiver mais de uma organização, a própria janela de login mostra um modal para
+  escolher qual usar (com o uso atual de cada uma), pois a coleta é por organização. Os campos ficam esmaecidos
   quando o provedor está desativado. Traz ainda a **Reabertura automática de sessão**
   (`sessaoAuto`) — ver a seção abaixo.
 - **Barra de tarefas** (Windows): exibir cada provedor na barra
@@ -664,14 +657,12 @@ Linux:
 
 Claude:
 
-- A autenticação pode ser **manual** (`organizationId` + `sessionKey` válidos) ou por
-  **login pelo navegador**, que captura a sessão e o Organization ID e os salva no
-  app (`claude-auth.json`). Como o uso é medido **por organização**, se a conta tiver
-  mais de uma o app pede para escolher qual usar (mostrando o uso de cada uma) em vez
+- A autenticação é pelo **login pelo navegador**, que captura a sessão e o
+  Organization ID e os salva no app (`claude-auth.json`). Como o uso é medido **por organização**, se a conta tiver
+  mais de uma a janela de login pede para escolher qual usar (mostrando o uso de cada uma) em vez
   de adivinhar — evita coletar da organização errada e reportar 0%
 - A sessão web **expira** e **não há renovação automática** (não existe refresh
   token): quando expira, a coleta recebe 401/403 e o app pede para **reconectar**
-  (no modo manual, atualize o `cookie`/`config.json`)
 - O login pelo navegador abre a `claude.ai` numa janela do app e lê o cookie de
   sessão; login por SSO/Google pode não funcionar dentro dela — nesse caso use o
   login por e-mail/código
@@ -685,9 +676,8 @@ Claude:
 
 Codex:
 
-- A autenticação pode ser por **arquivo** (um `auth.json` válido, com
-  `tokens.access_token`) ou por **login pelo navegador** (OAuth), que salva e
-  renova os tokens no próprio app (`codex-auth.json`)
+- A autenticação é pelo **login pelo navegador** (OAuth), que salva e renova os
+  tokens no próprio app (`codex-auth.json`)
 - O login pelo navegador abre a porta local `1455` para receber o retorno do OAuth
   (mesma porta usada pelo Codex CLI); deixe-a livre durante a conexão
 
@@ -697,6 +687,7 @@ Codex:
 index.html            # janela principal do app (menu lateral + secoes)
 widget.html           # janela do widget flutuante da area de trabalho
 update.html           # janela de novidades do aviso de atualizacao (OTA)
+claude-org.html       # modal de escolha da org do Claude, aberto na janela de login
 CHANGELOG.md          # changelog (fonte das novidades exibidas no app)
 src/
   main.ts             # shell: navegacao entre Envio de dados, Uso atual, Dashboards, Configuracoes e Sobre
@@ -714,6 +705,7 @@ src/
   novidades.ts        # historico de versoes (Novidades), renderizado na tela Sobre (get_changelog)
   changelog.ts        # parser + renderer de markdown do changelog (compartilhado)
   update.ts           # janela de novidades do OTA (delta de versoes; get_changelog/install_update)
+  claude-org.ts       # escolha da org do Claude na janela de login (claude_login_orgs/claude_select_org)
   settings.ts         # configuracoes com abas e auto-save (consome get_settings/save_settings)
   widget.ts           # widget da area de trabalho (consome get_widget_state)
   widget-modos.ts     # modos de exibicao do widget: "minimo" e "anelduplo"

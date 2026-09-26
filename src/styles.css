@@ -420,7 +420,7 @@ select {
   background-size: 11px;
 }
 /* Segmented control (radio group) — substitui o <select> quando ha' poucas
-   opcoes mutuamente exclusivas (ex.: modo de autenticacao). */
+   opcoes mutuamente exclusivas (ex.: modo da reabertura automatica). */
 .segmented { display: flex; gap: 3px; padding: 3px; background: #1c1b18; border: 1px solid #3a3833; border-radius: 11px; }
 .seg-option { flex: 1; display: flex; position: relative; }
 .seg-option input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
@@ -836,6 +836,29 @@ svg.pv-ico { display: block; }
 .upd-progress .foot { margin-top: 0; white-space: nowrap; }
 .upd-actions { flex: none; display: flex; align-items: center; gap: 10px; }
 .upd-status { flex: 1; margin-top: 0; color: #e0816f; }
+
+/* ===== Escolha da organização do Claude (claude-org.html) ===== */
+/* Modal na própria janela de login: fundo escurecido + cartão centralizado. */
+.corg-body { overflow: hidden; }
+.corg-backdrop { display: flex; align-items: center; justify-content: center; height: 100vh; padding: 20px;
+  background: rgba(10, 9, 8, .6); }
+.corg-modal { display: flex; flex-direction: column; gap: 14px; width: 100%; max-width: 420px; max-height: 100%;
+  background: #232220; border: 1px solid #34322d; border-radius: 14px; padding: 20px; box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
+.corg-head h1 { font-size: 18px; margin: 0; }
+.corg-sub { color: #9a968d; font-size: 13px; line-height: 1.45; margin: 8px 0 0; }
+.corg-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; }
+.corg-list .foot { margin: 0; }
+.corg-opt { display: flex; align-items: center; gap: 10px; padding: 11px 12px; background: #2a2926;
+  border: 1px solid #34322d; border-radius: 10px; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.corg-opt:hover { border-color: #4d493f; }
+.corg-opt:has(input:checked) { border-color: #d97757; background: #2e2a26; }
+.corg-opt input { accent-color: #d97757; margin: 0; flex: none; }
+.corg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.corg-meta { display: flex; align-items: baseline; gap: 5px; flex: none; }
+.corg-pct { font-weight: 700; font-size: 14px; }
+.corg-k { color: #807c74; font-size: 12px; }
+.corg-err { color: #e0816f; font-size: 13px; margin: 0; }
+.corg-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* ===== Entradas de changelog (janela OTA "delta" + tela Novidades) ===== */
 .cl-entry { padding: 2px 0 10px; border-bottom: 1px solid #34322d; }

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Escolha a organização</title>
+    <script type="module" src="/src/claude-org.ts" defer></script>
+  </head>
+
+  <body class="corg-body">
+    <div class="corg-backdrop">
+      <div class="corg-modal" role="dialog" aria-modal="true" aria-labelledby="corg-title">
+        <header class="corg-head">
+          <h1 id="corg-title">Escolha a organização</h1>
+          <p class="corg-sub" id="corg-sub">Sua conta tem mais de uma organização. Selecione a que você realmente usa — o uso é medido por organização.</p>
+        </header>
+
+        <div class="corg-list" id="corg-list" role="radiogroup" aria-labelledby="corg-title">
+          <p class="foot">Carregando organizações…</p>
+        </div>
+
+        <p class="corg-err" id="corg-err" hidden></p>
+
+        <footer class="corg-actions">
+          <button type="button" class="btn" id="corg-cancel">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="corg-confirm" disabled>Confirmar</button>
+        </footer>
+      </div>
+    </div>
+  </body>
+</html>
