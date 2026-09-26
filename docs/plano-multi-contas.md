@@ -7,7 +7,7 @@
 
 | Etapa | Estado |
 |---|---|
-| 1. Fundação (contas extras + Configurações + Uso atual) | **implementada**; falta a validação manual (abaixo) |
+| 1. Fundação (contas extras + Configurações + Uso atual) | **concluída e validada** (limite de 2 contas por provedor) |
 | 2. Sessão automática acompanha a conta do CLI | a fazer |
 | 3. Widget flutuante escolhe as contas | a fazer |
 | 4. Barra de tarefas escolhe as contas | a fazer |
@@ -15,11 +15,13 @@
 | 6. Envio escolhe a conta enviada | a fazer |
 | Fechamento (README, CHANGELOG, sync com upstream) | a fazer |
 
-**Pendente de validação manual na Etapa 1** (só dá para testar com o app rodando):
-- **`prompt=login` do Codex:** com uma conta Codex já conectada, "Adicionar conta" deve
-  mostrar a tela de login da OpenAI em vez de entrar direto na conta aberta no navegador. Se
-  não mostrar, o texto de status já orienta a sair da conta no navegador.
-- Ida e volta com a 0.2.71 instalada (roteiro em "Verificação").
+**Validação manual da Etapa 1** (com o app rodando):
+- **Validado:** `prompt=login` do Codex. Com uma conta já conectada, "Adicionar conta" leva à
+  tela de login da OpenAI e a segunda conta entra.
+- **Validado:** ida e volta com a 0.2.71 instalada. A instalada mostrou a principal de cada
+  provedor com as configurações intactas; de volta à dev, contas extras, apelidos, principal
+  e ordem dos cards estavam como antes.
+- **Validado:** login do Claude com Google (correção avulsa, abaixo).
 
 **Ajuste de desenho feito na implementação:** o id da conta é um **hash da identidade** (org
 + e-mail no Claude, `account_id` + e-mail no Codex), calculado do próprio arquivo de
