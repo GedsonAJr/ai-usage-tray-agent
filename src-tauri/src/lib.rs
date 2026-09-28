@@ -483,12 +483,26 @@ struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
-    /// Metrica da conta principal do provedor (`"claude"`/`"codex"`).
-    fn principal_metric(&self, provedor: &str) -> Option<&UsageMetric> {
-        self.principais
-            .get(provedor)
+    /// Metrica da conta que a barra de tarefas mostra no provedor (ver
+    /// `chave_da_barra`).
+    fn metrica_da_barra(&self, prefs: &contas::Prefs, provedor: Provedor) -> Option<&UsageMetric> {
+        let principal = self.principais.get(provedor.chave()).map(String::as_str);
+        chave_da_barra(prefs.conta_na_barra(provedor), &self.metrics, principal)
             .and_then(|chave| self.metrics.get(chave))
     }
+}
+
+/// Conta que a barra de tarefas mostra no provedor: uma por provedor, a escolhida
+/// na aba Barra se ela ainda existe (tem metrica no snapshot, onde toda conta
+/// conectada entra a cada coleta), senao a principal.
+fn chave_da_barra<'a>(
+    escolhida: Option<&'a str>,
+    metrics: &BTreeMap<String, UsageMetric>,
+    principal: Option<&'a str>,
+) -> Option<&'a str> {
+    escolhida
+        .filter(|chave| metrics.contains_key(*chave))
+        .or(principal)
 }
 
 /// Uma entrada do historico de envios: quando, qual ferramenta e o resultado.
@@ -768,6 +782,7 @@ pub fn run() {
             remover_conta,
             set_conta_apelido,
             set_conta_widget,
+            set_conta_barra,
             set_conta_principal
         ])
         .setup(|app| {
@@ -2799,7 +2814,8 @@ fn handle_collected<R: Runtime>(
             // A coleta sempre atualiza os dados/UI; o envio ao Loki ocorre conforme
             // as regras de envio (ver `envia_ao_loki`).
             update_metric(shared, &alvo.chave, metric.clone());
-            if !send_allowed {
+            // Conta sem limites de uso (ex.: Claude gratuito): nao ha' o que enviar.
+            if !send_allowed || metric.status == STATUS_SEM_LIMITES {
                 return false;
             }
             match send_metric_to_loki(client, config, &metric) {
@@ -3018,14 +3034,16 @@ fn collect_claude_metric(
     let payload: ClaudeUsageResponse = response
         .json()
         .map_err(|error| format!("Falha ao decodificar resposta do Claude: {error}"))?;
+    metrica_do_claude(&config.usuario, payload)
+}
 
-    let five_hour = payload
-        .five_hour
-        .ok_or_else(|| "five_hour nao foi encontrado na resposta do Claude.".to_string())?;
-    let utilization = five_hour.utilization.ok_or_else(|| {
-        "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string()
-    })?;
+/// Status da metrica de uma conta sem nenhuma janela de limite (ex.: a conta
+/// gratuita do Claude, que a API devolve sem `five_hour` nem `seven_day`). Nao e'
+/// erro: nao vai ao log nem ao Loki, e as telas mostram um aviso neutro.
+const STATUS_SEM_LIMITES: &str = "sem_limites";
 
+/// Interpreta a resposta de uso do Claude.
+fn metrica_do_claude(usuario: &str, payload: ClaudeUsageResponse) -> Result<UsageMetric, String> {
     let seven_day_utilization = payload
         .seven_day
         .as_ref()
@@ -3035,8 +3053,31 @@ fn collect_claude_metric(
         .as_ref()
         .and_then(|value| value.resets_at.clone());
 
+    if payload.five_hour.is_none() && seven_day_utilization.is_none() {
+        return Ok(UsageMetric {
+            usuario: normalized_user(usuario),
+            ferramenta: "claude".to_string(),
+            uso_percentual: None,
+            restante_percentual: None,
+            status: STATUS_SEM_LIMITES.to_string(),
+            coletado_em: Utc::now().to_rfc3339(),
+            reset_em: None,
+            erro: None,
+            uso_percentual_7d: None,
+            restante_percentual_7d: None,
+            reset_em_7d: None,
+        });
+    }
+
+    let five_hour = payload
+        .five_hour
+        .ok_or_else(|| "five_hour nao foi encontrado na resposta do Claude.".to_string())?;
+    let utilization = five_hour.utilization.ok_or_else(|| {
+        "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string()
+    })?;
+
     Ok(UsageMetric {
-        usuario: normalized_user(&config.usuario),
+        usuario: normalized_user(usuario),
         ferramenta: "claude".to_string(),
         uso_percentual: Some(round_percent(utilization)),
         restante_percentual: Some(remaining_percent(utilization)),
@@ -3159,6 +3200,14 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
             guard.clone()
         };
 
+        // Uma conta por provedor na barra de tarefas (no Linux, no titulo do tray): a
+        // escolhida na aba Barra, ou a principal sem escolha.
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let prefs = app
+            .try_state::<RuntimePaths>()
+            .map(|paths| contas::ler_prefs(&paths.config_dir))
+            .unwrap_or_default();
+
         #[cfg(target_os = "windows")]
         {
             taskbar_widget::set_paused(snapshot.paused);
@@ -3175,7 +3224,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.codex.habilitado
                         && config.providers.codex.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.principal_metric("codex"),
+                        snapshot.metrica_da_barra(&prefs, Provedor::Codex),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -3186,7 +3235,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.claude.habilitado
                         && config.providers.claude.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.principal_metric("claude"),
+                        snapshot.metrica_da_barra(&prefs, Provedor::Claude),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -3198,8 +3247,8 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         #[cfg(target_os = "linux")]
         tray.set_title(Some(format!(
             "C:{} / Cl:{}",
-            metric_text(snapshot.principal_metric("codex")),
-            metric_text(snapshot.principal_metric("claude"))
+            metric_text(snapshot.metrica_da_barra(&prefs, Provedor::Codex)),
+            metric_text(snapshot.metrica_da_barra(&prefs, Provedor::Claude))
         )))?;
 
         // Aplica a config do widget (criar/destruir/sempre-na-frente) em
@@ -3731,6 +3780,9 @@ fn widget_detail(
     };
     if metric.status == "erro" {
         return "erro".to_string();
+    }
+    if metric.status == STATUS_SEM_LIMITES {
+        return "sem limites".to_string();
     }
 
     let suffix = |iso: Option<&str>| {
@@ -4332,7 +4384,15 @@ fn claude_org_utilization(
 /// chave, se e' a principal e o apelido — a lista de contas da aba do provedor.
 fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
     let prefs = contas::ler_prefs(config_dir);
-    let lista = contas::listar(config_dir, provedor)
+    let contas = contas::listar(config_dir, provedor);
+    // A conta da barra de tarefas: a escolhida, se ainda existe, senao a principal
+    // (a mesma regra de `chave_da_barra`, aqui contra a lista do disco).
+    let na_barra = prefs
+        .conta_na_barra(provedor)
+        .filter(|chave| contas.iter().any(|c| c.chave == *chave))
+        .map(str::to_string)
+        .or_else(|| contas.iter().find(|c| c.principal).map(|c| c.chave.clone()));
+    let lista = contas
         .into_iter()
         .map(|conta| {
             let mut status = match provedor {
@@ -4343,6 +4403,7 @@ fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
             status["principal"] = json!(conta.principal);
             status["apelido"] = json!(prefs.apelido(&conta.chave));
             status["mostraNoWidget"] = json!(prefs.mostra_no_widget(&conta.chave));
+            status["naBarra"] = json!(na_barra.as_deref() == Some(conta.chave.as_str()));
             status
         })
         .collect();
@@ -4399,6 +4460,20 @@ fn set_conta_widget(
     mostra: bool,
 ) -> Result<(), String> {
     contas::definir_mostra_no_widget(&paths.config_dir, &conta, mostra)
+}
+
+/// Escolhe a conta que a barra de tarefas mostra no provedor dela (aba Barra). A
+/// barra ja' troca, sem esperar o proximo ciclo.
+#[tauri::command]
+fn set_conta_barra(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::definir_conta_na_barra(&paths.config_dir, &conta)?;
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
 }
 
 /// Torna uma conta a principal do provedor: a que o tray, a barra, o widget, o
@@ -4649,6 +4724,64 @@ mod tests {
         // Removida desde que a tela montou o seletor: volta para a principal.
         assert_eq!(chave(Some("codex:x")), Some("codex:a"));
         assert_eq!(conta_do_dashboard(&[], None).map(|c| &c.chave), None);
+    }
+
+    #[test]
+    fn claude_sem_nenhuma_janela_e_sem_limites_e_nao_erro() {
+        let resposta = |json: &str| -> ClaudeUsageResponse { serde_json::from_str(json).unwrap() };
+        // Conta gratuita: a API nao traz nenhuma janela (ausentes ou nulas).
+        for json in ["{}", r#"{"five_hour":null,"seven_day":null}"#] {
+            let metrica = metrica_do_claude("teste", resposta(json)).unwrap();
+            assert_eq!(metrica.status, STATUS_SEM_LIMITES);
+            assert_eq!(metrica.erro, None);
+            assert_eq!(metrica.uso_percentual, None);
+            assert_eq!(metrica.uso_percentual_7d, None);
+        }
+        // Com a sessao, como sempre.
+        let metrica = metrica_do_claude(
+            "teste",
+            resposta(r#"{"five_hour":{"utilization":34.0,"resets_at":null}}"#),
+        )
+        .unwrap();
+        assert_eq!(metrica.status, "ok");
+        assert_eq!(metrica.uso_percentual, Some(34.0));
+        // So' a semanal, sem a sessao: continua erro (nao e' a conta gratuita).
+        assert!(
+            metrica_do_claude("teste", resposta(r#"{"seven_day":{"utilization":10.0}}"#)).is_err()
+        );
+    }
+
+    #[test]
+    fn barra_mostra_a_escolhida_senao_a_principal() {
+        let metrica = UsageMetric {
+            usuario: "teste".to_string(),
+            ferramenta: "claude".to_string(),
+            uso_percentual: Some(10.0),
+            restante_percentual: Some(90.0),
+            status: "ok".to_string(),
+            coletado_em: Utc::now().to_rfc3339(),
+            reset_em: None,
+            erro: None,
+            uso_percentual_7d: None,
+            restante_percentual_7d: None,
+            reset_em_7d: None,
+        };
+        let metrics: BTreeMap<String, UsageMetric> = ["claude:a", "claude:b"]
+            .iter()
+            .map(|chave| (chave.to_string(), metrica.clone()))
+            .collect();
+        let principal = Some("claude:a");
+        assert_eq!(
+            chave_da_barra(Some("claude:b"), &metrics, principal),
+            Some("claude:b")
+        );
+        // Sem escolha, a principal.
+        assert_eq!(chave_da_barra(None, &metrics, principal), Some("claude:a"));
+        // A escolhida sumiu (removida, ou o provedor foi desligado): a principal.
+        assert_eq!(
+            chave_da_barra(Some("claude:x"), &metrics, principal),
+            Some("claude:a")
+        );
     }
 
     #[test]

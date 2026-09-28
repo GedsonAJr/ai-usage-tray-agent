@@ -10,7 +10,7 @@
 | 1. Fundação (contas extras + Configurações + Uso atual) | **concluída e validada** (limite de 2 contas por provedor) |
 | 2. Sessão automática acompanha a conta do CLI | **concluída e validada** |
 | 3. Widget flutuante escolhe as contas | **concluída e validada** |
-| 4. Barra de tarefas escolhe as contas | a fazer |
+| 4. Barra de tarefas escolhe as contas | **concluída e validada** |
 | 5. Dashboard Codex com seletor de conta | **concluída e validada** |
 | 6. Envio escolhe a conta enviada | a fazer |
 | Fechamento (README, CHANGELOG, sync com upstream) | a fazer |
@@ -292,12 +292,27 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
   esse teto.
 
 ### Etapa 4: Barra de tarefas escolhe as contas
-- `mostraNaBarra` por conta. Se ausente, herda `providers.*.mostraNaTaskbarWindows`.
-- `taskbar_widget.rs`: `SLOTS` vira `Vec` dinâmico com `set_slots(...)`. A janela guarda a
-  chave, não o índice. `KEY_COLORS` vira mapa. Mesma regra de rótulo.
-- Aba Barra: caixa de marcar por conta. Testar no Windows (`cfg(windows)`).
-- Com o limite de 2 por provedor, são no máximo 4 slots. Conferir se cabem na barra com o
-  rótulo da conta.
+- **Desenho revisto (decisão dele): uma conta por provedor na barra**, escolhida pelo
+  usuário; sem escolha, a principal. Assim o `taskbar_widget.rs` não muda (`SLOTS`
+  continua `[_; 2]`, um por provedor): só muda qual conta alimenta cada slot. O plano
+  original (vários slots, `mostraNaBarra` por conta) foi descartado.
+- `contas.json` ganha `contaNaBarra` (provedor → chave; `set_conta_barra`). A regra fica em
+  `chave_da_barra`: a escolhida se ainda existe (tem métrica no snapshot), senão a
+  principal; remover a conta limpa a escolha. `refresh_tray` usa `metrica_da_barra`, e o
+  título do tray no Linux também (o `principal_metric` saiu, sem uso).
+- O switch do provedor (`providers.*.mostraNaTaskbarWindows`) continua no `config.json`.
+- Aba Barra: o cartão de cada provedor ganhou, com 2 ou mais contas, um radio por conta
+  (apelido com o e-mail embaixo), apagado com o provedor desligado.
+- Testes: a regra da escolha e a limpeza ao remover.
+
+**Ajustes feitos junto com a Etapa 4:**
+- **Conta sem limites** (ex.: Claude gratuito, que a API devolve sem `five_hour` nem
+  `seven_day`): deixou de ser erro. `metrica_do_claude` devolve o status `sem_limites`, que
+  não vai ao log nem ao Loki, e as telas mostram "Sem limites de uso para acompanhar." em
+  cinza (Uso atual, resumo, os três modos do widget; "sem limites" na barra). Só a semanal,
+  sem a sessão, continua erro. Teste da interpretação da resposta.
+- Miniatura do modo mínimo (aba Widget): só o ícone, sem o nome do provedor, como o widget.
+- Clicar no widget tira o foco do app em uso: fica assim (decisão dele).
 
 ### Etapa 5: Dashboard Codex com seletor de conta
 - `get_codex_stats(conta, …)`, com o padrão na principal.

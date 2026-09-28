@@ -688,8 +688,10 @@ svg.pv-ico { display: block; }
 .pv-whead b { font-size: 7px; font-weight: 600; color: #eceae5; }
 /* minimo: uma linha por provedor (logo + nome + %). */
 .pv-wmin { display: flex; align-items: center; gap: 3px; }
-.pv-wmin b { font-size: 7px; font-weight: 600; color: #eceae5; margin-right: auto; }
 .pv-wmin em { font-size: 7px; font-style: normal; color: #cfcbc2; }
+/* Como no widget, só o ícone, sem o nome do provedor: a 1ª % leva as outras para a
+   direita. */
+.pv-wmin em:first-of-type { margin-left: auto; }
 /* anel duplo: aneis concentricos + icone central + legenda. */
 .pv-wg-anel { flex-direction: row; align-items: center; justify-content: center; gap: 6px; width: auto; }
 .pv-rings { position: relative; flex: none; }
@@ -715,6 +717,8 @@ svg.pv-ico { display: block; }
 .prov-conta-nome, .prov-conta-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prov-conta-nome { font-size: 13.5px; font-weight: 600; color: #e8e6e1; }
 .prov-conta-email { font-size: 12px; color: #9a968d; }
+/* Radio da conta na aba Barra (uma conta por provedor na barra de tarefas). */
+.prov-conta-radio { flex: none; width: 16px; height: 16px; margin: 0; accent-color: #d97757; cursor: pointer; }
 /* Provedor desligado: as contas ficam apagadas e sem clique (o switch de cima manda). */
 .prov-card.off .prov-contas { opacity: .45; pointer-events: none; }
 /* Switch menor, para itens abaixo de outro switch (as contas dentro do provedor). */

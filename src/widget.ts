@@ -15,6 +15,8 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
+  SEM_LIMITES,
+  TEXTO_SEM_LIMITES,
   type ProviderUsage,
 } from "./usage-format";
 import {
@@ -109,8 +111,13 @@ function renderProvider(
   const head = `<div class="wprov-head">${icon}<span class="wprov-name">${label}</span></div>`;
 
   const m = prov.metric;
-  if (!m || m.status === "erro" || m.erro) {
-    const nota = !m ? '<div class="wprov-note">Coletando…</div>' : '<div class="wprov-note err">erro na coleta</div>';
+  const semLimites = m?.status === SEM_LIMITES;
+  if (!m || semLimites || m.status === "erro" || m.erro) {
+    const nota = !m
+      ? '<div class="wprov-note">Coletando…</div>'
+      : semLimites
+        ? `<div class="wprov-note">${TEXTO_SEM_LIMITES}</div>`
+        : '<div class="wprov-note err">erro na coleta</div>';
     // Blocos invisíveis das janelas escolhidas por baixo do aviso: o card fica da
     // mesma altura do normal, e alternar entre uma conta com erro e outra com dados
     // não faz o widget pular.
@@ -119,7 +126,7 @@ function renderProvider(
       janelas.sessao ? windowBlock("Sessão 5h", 0, reset, mode) : "",
       janelas.semanal ? windowBlock("Semanal 7d", 0, reset, mode) : "",
     ].join("");
-    return `<div class="wprov${m ? " error" : ""}">${head}` +
+    return `<div class="wprov${m && !semLimites ? " error" : ""}">${head}` +
       `<div class="wprov-nota-box"><div class="wwins wfantasma" aria-hidden="true">${fantasma}</div>${nota}</div>` +
       `${botaoTroca(alterna)}</div>${linhaConta(alterna)}`;
   }

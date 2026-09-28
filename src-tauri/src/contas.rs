@@ -300,9 +300,13 @@ pub fn remover(config_dir: &Path, chave: &str) -> Result<(), String> {
     listar_sem_trava(config_dir, provedor);
 
     let mut prefs = ler_prefs_sem_trava(config_dir);
-    let tinha = prefs.contas.remove(chave).is_some() || prefs.ordem.iter().any(|k| k == chave);
+    let tinha = prefs.contas.remove(chave).is_some()
+        || prefs.ordem.iter().any(|k| k == chave)
+        || prefs.conta_na_barra.values().any(|k| k == chave);
     if tinha {
         prefs.ordem.retain(|k| k != chave);
+        // A barra volta a' principal do provedor.
+        prefs.conta_na_barra.retain(|_, k| k != chave);
         gravar_prefs_sem_trava(config_dir, &prefs)?;
     }
     Ok(())
@@ -318,6 +322,11 @@ pub struct Prefs {
     /// Ordem dos cards da tela "Uso atual". Um provedor sem conta aparece com a
     /// chave dele ("claude"), que e' a do card de "nao conectado".
     pub ordem: Vec<String>,
+    /// Conta que a barra de tarefas mostra, por provedor (`"claude"` -> chave). A
+    /// barra mostra uma conta por provedor; sem escolha (ou se a escolhida sumiu),
+    /// a principal.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub conta_na_barra: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -337,6 +346,13 @@ impl Prefs {
         self.contas
             .get(chave)
             .and_then(|conta| conta.apelido.as_deref())
+    }
+
+    /// Conta escolhida para a barra de tarefas no provedor, se houver escolha.
+    pub fn conta_na_barra(&self, provedor: Provedor) -> Option<&str> {
+        self.conta_na_barra
+            .get(provedor.chave())
+            .map(String::as_str)
     }
 
     /// A conta aparece no widget (se o provedor dela tambem estiver ligado la').
@@ -410,6 +426,18 @@ pub fn definir_mostra_no_widget(
     if *conta == PrefsConta::default() {
         prefs.contas.remove(chave);
     }
+    gravar_prefs_sem_trava(config_dir, &prefs)
+}
+
+/// Escolhe a conta que a barra de tarefas mostra no provedor dela.
+pub fn definir_conta_na_barra(config_dir: &Path, chave: &str) -> Result<(), String> {
+    let provedor =
+        Provedor::da_chave(chave).ok_or_else(|| format!("Conta desconhecida: {chave}"))?;
+    let _trava = trava();
+    let mut prefs = ler_prefs_sem_trava(config_dir);
+    prefs
+        .conta_na_barra
+        .insert(provedor.chave().to_string(), chave.to_string());
     gravar_prefs_sem_trava(config_dir, &prefs)
 }
 
@@ -648,6 +676,11 @@ mod tests {
         let chave_a = chave_claude("org-a", "a@x.com");
         definir_apelido(&dir, &chave_a, Some("Pessoal".to_string())).unwrap();
         definir_ordem(&dir, &[chave_b.clone(), chave_a.clone()]).unwrap();
+        definir_conta_na_barra(&dir, &chave_a).unwrap();
+        assert_eq!(
+            ler_prefs(&dir).conta_na_barra(Provedor::Claude),
+            Some(chave_a.as_str())
+        );
 
         remover(&dir, &chave_a).unwrap();
         let contas = listar(&dir, Provedor::Claude);
@@ -656,6 +689,8 @@ mod tests {
         assert!(contas[0].principal);
         let prefs = ler_prefs(&dir);
         assert_eq!(prefs.apelido(&chave_a), None);
+        // A barra volta a' principal (a escolha some com a conta).
+        assert_eq!(prefs.conta_na_barra(Provedor::Claude), None);
         assert_eq!(prefs.ordem, vec![chave_b]);
     }
 

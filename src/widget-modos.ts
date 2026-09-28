@@ -12,6 +12,8 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
+  SEM_LIMITES,
+  TEXTO_SEM_LIMITES,
   type ProviderUsage,
 } from "./usage-format";
 
@@ -99,6 +101,7 @@ export function renderProviderMinimo(
   const head = label === "Codex" ? iconCodex() : ICON_CLAUDE;
   const m = prov.metric;
   if (!m) return `<div class="wprov wprov-min">${head}<span class="wprov-note">Coletando…</span></div>`;
+  if (m.status === SEM_LIMITES) return `<div class="wprov wprov-min">${head}<span class="wprov-note">${TEXTO_SEM_LIMITES}</span></div>`;
   if (m.status === "erro" || m.erro) {
     return `<div class="wprov wprov-min error">${head}<span class="wprov-note err">erro</span></div>`;
   }
@@ -141,13 +144,18 @@ export function renderProviderAnelDuplo(
   // identifica, então a legenda fica só com os anéis e as porcentagens.
   const icon = label === "Codex" ? iconCodex() : ICON_CLAUDE;
   const m = prov.metric;
-  if (!m || m.status === "erro" || m.erro) {
-    const nota = !m ? '<span class="wprov-note">Coletando…</span>' : '<span class="wprov-note err">erro</span>';
+  const semLimites = m?.status === SEM_LIMITES;
+  if (!m || semLimites || m.status === "erro" || m.erro) {
+    const nota = !m
+      ? '<span class="wprov-note">Coletando…</span>'
+      : semLimites
+        ? `<span class="wprov-note">${TEXTO_SEM_LIMITES}</span>`
+        : '<span class="wprov-note err">erro</span>';
     // O ícone numa caixa do tamanho dos anéis (sem desenhá-los, que pareceriam 0%):
     // o card fica da mesma altura do normal, e alternar entre uma conta com erro e
     // outra com dados não faz o widget pular. O tamanho segue as janelas escolhidas.
     const lado = janelas.sessao && janelas.semanal ? 76 : 54;
-    return `<div class="wprov wprov-duplo${m ? " error" : ""}">` +
+    return `<div class="wprov wprov-duplo${m && !semLimites ? " error" : ""}">` +
       `<span class="wduplo-rings" style="width:${lado}px;height:${lado}px"><span class="wduplo-icon">${icon}</span></span>` +
       `<span class="wduplo-info">${nota}</span>${botaoTroca(alterna)}</div>${linhaConta(alterna)}`;
   }

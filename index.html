@@ -367,35 +367,41 @@
                     </div>
                   </div>
                   <div class="prov-toggles">
-                    <label class="prov-toggle">
-                      <span class="provider-logo">
-                        <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
-                          <defs><linearGradient id="codexg-bar" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
-                            <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
-                            <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
-                          <g fill="url(#codexg-bar)">
-                            <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
-                            <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
-                            <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
-                          </g>
-                          <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-                          <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
-                        </svg>
-                      </span>
-                      <span class="prov-toggle-text">
-                        <span class="prov-toggle-name">Codex</span>
-                        <span class="prov-toggle-note" id="barra-codex-note" hidden></span>
-                      </span>
-                      <span class="switch"><input type="checkbox" id="set-codexTaskbar"><span class="switch-track"></span></span>
-                    </label>
-                    <label class="prov-toggle">
-                      <span class="provider-logo"><span class="spark">✳</span></span>
-                      <span class="prov-toggle-text">
-                        <span class="prov-toggle-name">Claude</span>
-                        <span class="prov-toggle-note" id="barra-claude-note" hidden></span>
-                      </span>
-                      <span class="switch"><input type="checkbox" id="set-claudeTaskbar"><span class="switch-track"></span></span>
-                    </label>
+                    <div class="prov-card" id="set-barraCodexCard">
+                      <label class="prov-toggle">
+                        <span class="provider-logo">
+                          <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+                            <defs><linearGradient id="codexg-bar" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                              <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
+                              <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
+                            <g fill="url(#codexg-bar)">
+                              <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
+                              <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
+                              <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
+                            </g>
+                            <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+                            <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
+                          </svg>
+                        </span>
+                        <span class="prov-toggle-text">
+                          <span class="prov-toggle-name">Codex</span>
+                          <span class="prov-toggle-note" id="barra-codex-note" hidden></span>
+                        </span>
+                        <span class="switch"><input type="checkbox" id="set-codexTaskbar"><span class="switch-track"></span></span>
+                      </label>
+                      <div class="prov-contas anima-altura" id="set-barraCodexContas" hidden></div>
+                    </div>
+                    <div class="prov-card" id="set-barraClaudeCard">
+                      <label class="prov-toggle">
+                        <span class="provider-logo"><span class="spark">✳</span></span>
+                        <span class="prov-toggle-text">
+                          <span class="prov-toggle-name">Claude</span>
+                          <span class="prov-toggle-note" id="barra-claude-note" hidden></span>
+                        </span>
+                        <span class="switch"><input type="checkbox" id="set-claudeTaskbar"><span class="switch-track"></span></span>
+                      </label>
+                      <div class="prov-contas anima-altura" id="set-barraClaudeContas" hidden></div>
+                    </div>
                   </div>
                 </div>
 
@@ -524,8 +530,8 @@
                     <div class="pv" aria-hidden="true">
                       <div class="pv-screen">
                         <div class="pv-desk-widget pv-wg-minimo">
-                          <div class="pv-wmin"><span class="pv-ico spark">✳</span><b>Claude</b><em>20%</em><em>50%</em></div>
-                          <div class="pv-wmin"><svg class="pv-ico" viewBox="0 0 100 100" aria-hidden="true"><g fill="url(#codexg)"><circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/><circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/><circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/></g><path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/></svg><b>Codex</b><em>30%</em><em>45%</em></div>
+                          <div class="pv-wmin"><span class="pv-ico spark">✳</span><em>20%</em><em>50%</em></div>
+                          <div class="pv-wmin"><svg class="pv-ico" viewBox="0 0 100 100" aria-hidden="true"><g fill="url(#codexg)"><circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/><circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/><circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/></g><path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/></svg><em>30%</em><em>45%</em></div>
                         </div>
                         <div class="pv-bar">
                           <div class="pv-menu"><span class="pv-app a1"></span><span class="pv-app a2"></span></div>

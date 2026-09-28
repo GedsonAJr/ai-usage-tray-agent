@@ -111,6 +111,7 @@ function fillForm(data: SettingsData): void {
 
   $<HTMLInputElement>("set-claudeHab").checked = claude.habilitado !== false;
   $<HTMLInputElement>("set-claudeTaskbar").checked = claude.mostraNaTaskbarWindows !== false;
+  syncBarraProvedores();
   // Guarda o caminho do CLI (editável só pelo config.json) para devolvê-lo no save
   // — o painel manda o bloco `providers` inteiro, então omitir zeraria o valor.
   claudeSessaoAutoCliPath = claude.sessaoAuto?.caminhoCli ?? "";
@@ -380,6 +381,9 @@ interface ContaStatus {
   apelido: string | null;
   /// A conta aparece no widget (quando o provedor também está ligado lá).
   mostraNoWidget: boolean;
+  /// É a conta que a barra de tarefas mostra no provedor (uma por provedor; a
+  /// principal, sem escolha).
+  naBarra: boolean;
   connected: boolean;
   needsReconnect: boolean;
   email: string | null;
@@ -462,6 +466,52 @@ function renderContas(p: ProvedorConta): void {
   }
   syncProviderHints();
   renderWidgetContas(p);
+  renderBarraContas(p);
+}
+
+/// Nome da conta nas listas das abas Widget e Barra: apelido, com o e-mail embaixo
+/// (sem apelido, o e-mail é o nome).
+function nomeDaConta(c: ContaStatus): string {
+  const nome = c.apelido ?? c.email ?? "Conta sem e-mail";
+  const email = c.apelido && c.email ? `<span class="prov-conta-email">${escapeHtml(c.email)}</span>` : "";
+  return `<span class="prov-conta-textos"><span class="prov-conta-nome">${escapeHtml(nome)}</span>${email}</span>`;
+}
+
+/// Aba Barra: a barra mostra uma conta por provedor. Com 2 ou mais contas, o cartão
+/// do provedor lista as contas com um radio para escolher qual (a principal, sem
+/// escolha). Ligar o provedor continua no switch de cima.
+function renderBarraContas(p: ProvedorConta): void {
+  const ui = PROVEDORES[p];
+  const lista = $(`set-barra${ui.nome}Contas`);
+  const varias = ui.contas.length > 1;
+  lista.hidden = !varias;
+  if (!varias) {
+    lista.innerHTML = "";
+    return;
+  }
+  lista.innerHTML = ui.contas.map((c) =>
+    `<label class="prov-conta">${nomeDaConta(c)}` +
+    `<input type="radio" class="prov-conta-radio" name="barra-${p}" data-conta="${escapeHtml(c.chave)}"${c.naBarra ? " checked" : ""}></label>`,
+  ).join("");
+}
+
+/// Provedor desligado na aba Barra: as contas dele ficam apagadas e sem clique.
+function syncBarraProvedores(): void {
+  for (const nome of ["Claude", "Codex"]) {
+    const ligado = $<HTMLInputElement>(`set-${nome.toLowerCase()}Taskbar`).checked;
+    $(`set-barra${nome}Card`).classList.toggle("off", !ligado);
+  }
+}
+
+async function salvarContaBarra(p: ProvedorConta, chave: string): Promise<void> {
+  try {
+    await invoke("set_conta_barra", { conta: chave });
+    setSaved();
+  } catch (e) {
+    setMsg("Falha ao escolher a conta da barra: " + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  // Com erro, a lista redesenhada devolve o radio ao valor gravado.
+  await loadContas(p, true);
 }
 
 /// Aba Widget: com 2 ou mais contas, um switch por conta dentro do cartão do
@@ -476,13 +526,11 @@ function renderWidgetContas(p: ProvedorConta): void {
     lista.innerHTML = "";
     return;
   }
-  lista.innerHTML = ui.contas.map((c) => {
-    const nome = c.apelido ?? c.email ?? "Conta sem e-mail";
-    const email = c.apelido && c.email ? `<span class="prov-conta-email">${escapeHtml(c.email)}</span>` : "";
-    return `<label class="prov-conta"><span class="prov-conta-textos"><span class="prov-conta-nome">${escapeHtml(nome)}</span>${email}</span>` +
-      `<span class="switch switch-sm"><input type="checkbox" data-conta="${escapeHtml(c.chave)}"${c.mostraNoWidget !== false ? " checked" : ""}>` +
-      `<span class="switch-track"></span></span></label>`;
-  }).join("");
+  lista.innerHTML = ui.contas.map((c) =>
+    `<label class="prov-conta">${nomeDaConta(c)}` +
+    `<span class="switch switch-sm"><input type="checkbox" data-conta="${escapeHtml(c.chave)}"${c.mostraNoWidget !== false ? " checked" : ""}>` +
+    `<span class="switch-track"></span></span></label>`,
+  ).join("");
 }
 
 /// Provedor desligado na aba Widget: as contas dele ficam apagadas e sem clique.
@@ -682,6 +730,14 @@ function wireContas(p: ProvedorConta): void {
     if (!chave) return;
     e.stopPropagation();
     void salvarContaWidget(p, chave, input.checked);
+  });
+  // Radio da conta na aba Barra: também vai para o contas.json, fora do auto-save.
+  $(`set-barra${PROVEDORES[p].nome}Contas`).addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    const chave = input.dataset.conta;
+    if (!chave || !input.checked) return;
+    e.stopPropagation();
+    void salvarContaBarra(p, chave);
   });
   // O apelido é gravado à parte do auto-save do formulário (que só cuida do
   // config.json): stopPropagation evita o save_settings geral.
@@ -1000,6 +1056,8 @@ export function initSettings(): void {
   $("set-codexHab").addEventListener("change", syncProviderHints);
   $("set-wdgClaude").addEventListener("change", syncWidgetProvedores);
   $("set-wdgCodex").addEventListener("change", syncWidgetProvedores);
+  $("set-claudeTaskbar").addEventListener("change", syncBarraProvedores);
+  $("set-codexTaskbar").addEventListener("change", syncBarraProvedores);
   wireContas("codex");
   $("set-claudeHab").addEventListener("change", syncProviderHints);
   wireContas("claude");

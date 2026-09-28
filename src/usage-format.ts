@@ -14,6 +14,11 @@ export interface UsageMetric {
   uso_percentual_7d?: number;
   reset_em_7d?: string | null;
 }
+/// `status` de uma conta sem nenhuma janela de limite (ex.: a conta gratuita do
+/// Claude). Não é erro: as telas mostram TEXTO_SEM_LIMITES, em cinza.
+export const SEM_LIMITES = "sem_limites";
+export const TEXTO_SEM_LIMITES = "Sem limites de uso para acompanhar.";
+
 export interface ProviderUsage {
   habilitado: boolean;
   metric: UsageMetric | null;

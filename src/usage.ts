@@ -16,6 +16,8 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
+  SEM_LIMITES,
+  TEXTO_SEM_LIMITES,
   type UsageMetric,
 } from "./usage-format";
 
@@ -244,6 +246,8 @@ function corpoConta(prov: ContaUso): { estado: string; selo: string; html: strin
   }
   const m = prov.metric;
   if (!m) return { estado: "", selo: "", html: '<div class="uprov-note">Coletando dados…</div>', nota: true };
+  // Conta sem limites (ex.: Claude gratuito): aviso neutro, não erro.
+  if (m.status === SEM_LIMITES) return { estado: "", selo: "", html: `<div class="uprov-note">${TEXTO_SEM_LIMITES}</div>`, nota: true };
   if (m.status === "erro" || m.erro) {
     // Sem selo: a mensagem em vermelho já diz que é erro.
     return {
@@ -330,6 +334,7 @@ function resumoConta(prov: ContaUso): string {
     const texto = prov.habilitado ? "Coletando dados…" : "Desabilitado.";
     return `<div class="ures ucol-resumo">${nome}<div class="ures-note">${texto}</div></div>`;
   }
+  if (m.status === SEM_LIMITES) return `<div class="ures ucol-resumo">${nome}<div class="ures-note">${TEXTO_SEM_LIMITES}</div></div>`;
   if (m.status === "erro" || m.erro) {
     return `<div class="ures ucol-resumo error">${nome}` +
       `<div class="ures-note err">${escapeHtml(m.erro ?? "Falha na coleta.")}</div></div>`;
