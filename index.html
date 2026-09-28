@@ -453,36 +453,46 @@
 
               <!-- Widget -->
               <div class="stab" data-spanel="widget">
+                <!-- Cada provedor: o switch dele e, com 2 ou mais contas, um switch por
+                     conta (settings.ts, renderWidgetContas). Os switches das contas
+                     ficam FORA do <label> do provedor, senão cada clique neles
+                     também ligaria/desligaria o provedor. -->
                 <div class="row prov-toggles-row">
-                  <label class="prov-toggle">
-                    <span class="provider-logo"><span class="spark">✳</span></span>
-                    <span class="prov-toggle-text">
-                      <span class="prov-toggle-name">Claude</span>
-                      <span class="prov-toggle-note" id="wdg-claude-note" hidden></span>
-                    </span>
-                    <span class="switch"><input type="checkbox" id="set-wdgClaude"><span class="switch-track"></span></span>
-                  </label>
-                  <label class="prov-toggle">
-                    <span class="provider-logo">
-                      <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
-                        <defs><linearGradient id="codexg-wdg" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
-                          <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
-                          <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
-                        <g fill="url(#codexg-wdg)">
-                          <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
-                          <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
-                          <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
-                        </g>
-                        <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
-                        <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
-                      </svg>
-                    </span>
-                    <span class="prov-toggle-text">
-                      <span class="prov-toggle-name">Codex</span>
-                      <span class="prov-toggle-note" id="wdg-codex-note" hidden></span>
-                    </span>
-                    <span class="switch"><input type="checkbox" id="set-wdgCodex"><span class="switch-track"></span></span>
-                  </label>
+                  <div class="prov-card" id="set-wdgClaudeCard">
+                    <label class="prov-toggle">
+                      <span class="provider-logo"><span class="spark">✳</span></span>
+                      <span class="prov-toggle-text">
+                        <span class="prov-toggle-name">Claude</span>
+                        <span class="prov-toggle-note" id="wdg-claude-note" hidden></span>
+                      </span>
+                      <span class="switch"><input type="checkbox" id="set-wdgClaude"><span class="switch-track"></span></span>
+                    </label>
+                    <div class="prov-contas anima-altura" id="set-wdgClaudeContas" hidden></div>
+                  </div>
+                  <div class="prov-card" id="set-wdgCodexCard">
+                    <label class="prov-toggle">
+                      <span class="provider-logo">
+                        <svg class="pico" width="26" height="26" viewBox="0 0 100 100" aria-hidden="true">
+                          <defs><linearGradient id="codexg-wdg" x1="22" y1="6" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+                            <stop offset="0" stop-color="#a48cf2"/><stop offset=".55" stop-color="#5b62ec"/>
+                            <stop offset="1" stop-color="#3a3fe6"/></linearGradient></defs>
+                          <g fill="url(#codexg-wdg)">
+                            <circle cx="50" cy="50" r="30"/><circle cx="50" cy="24" r="15"/><circle cx="68" cy="32" r="15"/>
+                            <circle cx="76" cy="50" r="15"/><circle cx="68" cy="68" r="15"/><circle cx="50" cy="76" r="15"/>
+                            <circle cx="32" cy="68" r="15"/><circle cx="24" cy="50" r="15"/><circle cx="32" cy="32" r="15"/>
+                          </g>
+                          <path d="M40 36 L53 50 L40 64" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+                          <rect x="55" y="57" width="19" height="8" rx="4" fill="#fff"/>
+                        </svg>
+                      </span>
+                      <span class="prov-toggle-text">
+                        <span class="prov-toggle-name">Codex</span>
+                        <span class="prov-toggle-note" id="wdg-codex-note" hidden></span>
+                      </span>
+                      <span class="switch"><input type="checkbox" id="set-wdgCodex"><span class="switch-track"></span></span>
+                    </label>
+                    <div class="prov-contas anima-altura" id="set-wdgCodexContas" hidden></div>
+                  </div>
                 </div>
 
                 <div class="set-group">Modo de exibição</div>

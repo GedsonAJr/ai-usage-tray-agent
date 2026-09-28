@@ -767,6 +767,7 @@ pub fn run() {
             claude_select_org,
             remover_conta,
             set_conta_apelido,
+            set_conta_widget,
             set_conta_principal
         ])
         .setup(|app| {
@@ -1383,30 +1384,43 @@ fn apply_paused<R: Runtime>(
 
 /// Estado para o widget da area de trabalho: preferencias do widget mais as
 /// metricas atuais (o mesmo snapshot da tela "Uso atual"). Barato e sem rede.
+///
+/// `contas` traz uma entrada por conta (e o card do provedor sem conta), na ordem
+/// da tela "Uso atual", que tambem e' a ordem dos provedores no widget. `mostra`:
+/// o provedor ligado no widget E a conta ligada (aba Widget).
 fn widget_state_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
     let snapshot = lock_snapshot(shared).clone();
     let config = read_config(paths);
     let widget = &config.widget;
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let contas: Vec<Value> = entradas_de_uso(&config, &paths.config_dir, &prefs)
+        .into_iter()
+        .map(|entrada| {
+            let provedor_ligado = match entrada.provedor {
+                Provedor::Claude => widget.mostra_claude,
+                Provedor::Codex => widget.mostra_codex,
+            };
+            json!({
+                "chave": entrada.chave,
+                "provedor": entrada.provedor.chave(),
+                "rotulo": entrada.rotulo,
+                "principal": entrada.principal,
+                "habilitado": entrada.habilitado,
+                "mostra": provedor_ligado && prefs.mostra_no_widget(&entrada.chave),
+                "metric": snapshot.metrics.get(&entrada.chave),
+            })
+        })
+        .collect();
     json!({
+        "contas": contas,
         "habilitado": widget.habilitado,
-        "mostraClaude": widget.mostra_claude,
-        "mostraCodex": widget.mostra_codex,
         "fundo": widget.fundo,
         "opacidade": widget.opacidade,
         "janelas": widget.janelas,
         "formatoReset": widget.formato_reset,
         "modo": widget.modo,
         "sempreNaFrente": widget.sempre_na_frente,
-        "ordem": config.providers.ordem,
         "paused": snapshot.paused,
-        "claude": {
-            "habilitado": config.providers.claude.habilitado,
-            "metric": snapshot.principal_metric("claude"),
-        },
-        "codex": {
-            "habilitado": config.providers.codex.habilitado,
-            "metric": snapshot.principal_metric("codex"),
-        },
     })
 }
 
@@ -4328,6 +4342,7 @@ fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
             status["chave"] = json!(conta.chave);
             status["principal"] = json!(conta.principal);
             status["apelido"] = json!(prefs.apelido(&conta.chave));
+            status["mostraNoWidget"] = json!(prefs.mostra_no_widget(&conta.chave));
             status
         })
         .collect();
@@ -4373,6 +4388,17 @@ fn set_conta_apelido(
     apelido: Option<String>,
 ) -> Result<(), String> {
     contas::definir_apelido(&paths.config_dir, &conta, apelido)
+}
+
+/// Mostra ou esconde uma conta no widget (aba Widget). O provedor inteiro continua
+/// no `widget.mostraClaude/Codex` do config.json; esta e' a escolha dentro dele.
+#[tauri::command]
+fn set_conta_widget(
+    paths: State<'_, RuntimePaths>,
+    conta: String,
+    mostra: bool,
+) -> Result<(), String> {
+    contas::definir_mostra_no_widget(&paths.config_dir, &conta, mostra)
 }
 
 /// Torna uma conta a principal do provedor: a que o tray, a barra, o widget, o

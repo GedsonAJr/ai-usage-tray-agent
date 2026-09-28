@@ -325,6 +325,11 @@ pub struct Prefs {
 pub struct PrefsConta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apelido: Option<String>,
+    /// `Some(false)`: a conta nao aparece no widget. Ausente = aparece, que e' o
+    /// padrao (so' o "desligado" e' gravado). O provedor inteiro continua no
+    /// `widget.mostraClaude/Codex` do config.json, que a versao antiga tambem le'.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mostra_no_widget: Option<bool>,
 }
 
 impl Prefs {
@@ -332,6 +337,14 @@ impl Prefs {
         self.contas
             .get(chave)
             .and_then(|conta| conta.apelido.as_deref())
+    }
+
+    /// A conta aparece no widget (se o provedor dela tambem estiver ligado la').
+    pub fn mostra_no_widget(&self, chave: &str) -> bool {
+        self.contas
+            .get(chave)
+            .and_then(|conta| conta.mostra_no_widget)
+            .unwrap_or(true)
     }
 }
 
@@ -379,6 +392,23 @@ pub fn definir_apelido(
                 }
             }
         }
+    }
+    gravar_prefs_sem_trava(config_dir, &prefs)
+}
+
+/// Mostra ou esconde uma conta no widget. Ligar volta ao padrao (o campo sai do
+/// arquivo); so' o "desligado" fica gravado.
+pub fn definir_mostra_no_widget(
+    config_dir: &Path,
+    chave: &str,
+    mostra: bool,
+) -> Result<(), String> {
+    let _trava = trava();
+    let mut prefs = ler_prefs_sem_trava(config_dir);
+    let conta = prefs.contas.entry(chave.to_string()).or_default();
+    conta.mostra_no_widget = (!mostra).then_some(false);
+    if *conta == PrefsConta::default() {
+        prefs.contas.remove(chave);
     }
     gravar_prefs_sem_trava(config_dir, &prefs)
 }
@@ -636,6 +666,24 @@ mod tests {
         assert_eq!(ler_prefs(&dir).apelido("claude:1"), Some("Trabalho"));
         definir_apelido(&dir, "claude:1", Some("   ".to_string())).unwrap();
         assert_eq!(ler_prefs(&dir), Prefs::default());
+    }
+
+    #[test]
+    fn mostra_no_widget_so_grava_o_desligado() {
+        let dir = pasta("widget");
+        assert!(ler_prefs(&dir).mostra_no_widget("claude:1"));
+        definir_mostra_no_widget(&dir, "claude:1", false).unwrap();
+        assert!(!ler_prefs(&dir).mostra_no_widget("claude:1"));
+        // Ligar de novo tira o campo, e a conta sem mais nada sai do arquivo.
+        definir_mostra_no_widget(&dir, "claude:1", true).unwrap();
+        assert_eq!(ler_prefs(&dir), Prefs::default());
+        // O apelido nao se perde ao mexer no widget, nem o widget ao limpar o apelido.
+        definir_apelido(&dir, "claude:1", Some("Trabalho".to_string())).unwrap();
+        definir_mostra_no_widget(&dir, "claude:1", false).unwrap();
+        definir_apelido(&dir, "claude:1", None).unwrap();
+        let prefs = ler_prefs(&dir);
+        assert!(!prefs.mostra_no_widget("claude:1"));
+        assert_eq!(prefs.apelido("claude:1"), None);
     }
 
     #[test]

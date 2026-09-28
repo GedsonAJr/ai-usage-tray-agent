@@ -130,6 +130,7 @@ function fillForm(data: SettingsData): void {
 
   $<HTMLInputElement>("set-wdgClaude").checked = widget?.mostraClaude !== false;
   $<HTMLInputElement>("set-wdgCodex").checked = widget?.mostraCodex !== false;
+  syncWidgetProvedores();
   $<HTMLInputElement>("set-wdgTopo").checked = widget?.sempreNaFrente !== false;
   $<HTMLInputElement>("set-wdgFundo").value = widget?.fundo ?? "";
   $<HTMLSelectElement>("set-wdgJanelas").value = normJanelas(widget?.janelas);
@@ -377,6 +378,8 @@ interface ContaStatus {
   chave: string;
   principal: boolean;
   apelido: string | null;
+  /// A conta aparece no widget (quando o provedor também está ligado lá).
+  mostraNoWidget: boolean;
   connected: boolean;
   needsReconnect: boolean;
   email: string | null;
@@ -458,6 +461,46 @@ function renderContas(p: ProvedorConta): void {
     statusEl.hidden = ui.contas.length > 0 && !noLimite;
   }
   syncProviderHints();
+  renderWidgetContas(p);
+}
+
+/// Aba Widget: com 2 ou mais contas, um switch por conta dentro do cartão do
+/// provedor (apelido, com o e-mail embaixo). Com uma conta só, o switch do
+/// provedor já basta. Ligar o provedor continua no switch de cima.
+function renderWidgetContas(p: ProvedorConta): void {
+  const ui = PROVEDORES[p];
+  const lista = $(`set-wdg${ui.nome}Contas`);
+  const varias = ui.contas.length > 1;
+  lista.hidden = !varias;
+  if (!varias) {
+    lista.innerHTML = "";
+    return;
+  }
+  lista.innerHTML = ui.contas.map((c) => {
+    const nome = c.apelido ?? c.email ?? "Conta sem e-mail";
+    const email = c.apelido && c.email ? `<span class="prov-conta-email">${escapeHtml(c.email)}</span>` : "";
+    return `<label class="prov-conta"><span class="prov-conta-textos"><span class="prov-conta-nome">${escapeHtml(nome)}</span>${email}</span>` +
+      `<span class="switch switch-sm"><input type="checkbox" data-conta="${escapeHtml(c.chave)}"${c.mostraNoWidget !== false ? " checked" : ""}>` +
+      `<span class="switch-track"></span></span></label>`;
+  }).join("");
+}
+
+/// Provedor desligado na aba Widget: as contas dele ficam apagadas e sem clique.
+function syncWidgetProvedores(): void {
+  for (const nome of ["Claude", "Codex"]) {
+    $(`set-wdg${nome}Card`).classList.toggle("off", !$<HTMLInputElement>(`set-wdg${nome}`).checked);
+  }
+}
+
+async function salvarContaWidget(p: ProvedorConta, chave: string, mostra: boolean): Promise<void> {
+  try {
+    await invoke("set_conta_widget", { conta: chave, mostra });
+    setSaved();
+  } catch (e) {
+    setMsg("Falha ao salvar a conta do widget: " + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  // Com erro, a lista redesenhada devolve o switch ao valor gravado.
+  await loadContas(p, true);
 }
 
 /// Relê a lista de contas (sem rede). Sem `forcar`, só redesenha se mudou.
@@ -630,6 +673,15 @@ function wireContas(p: ProvedorConta): void {
       }
       void removerConta(p, chave);
     }
+  });
+  // Switch de uma conta na aba Widget: vai para o contas.json, à parte do auto-save
+  // do formulário (que só cuida do config.json).
+  $(`set-wdg${PROVEDORES[p].nome}Contas`).addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    const chave = input.dataset.conta;
+    if (!chave) return;
+    e.stopPropagation();
+    void salvarContaWidget(p, chave, input.checked);
   });
   // O apelido é gravado à parte do auto-save do formulário (que só cuida do
   // config.json): stopPropagation evita o save_settings geral.
@@ -946,6 +998,8 @@ export function initSettings(): void {
   $("set-srvHab").addEventListener("change", syncServerPinHint);
   $("set-srvPin").addEventListener("input", syncServerPinHint);
   $("set-codexHab").addEventListener("change", syncProviderHints);
+  $("set-wdgClaude").addEventListener("change", syncWidgetProvedores);
+  $("set-wdgCodex").addEventListener("change", syncWidgetProvedores);
   wireContas("codex");
   $("set-claudeHab").addEventListener("change", syncProviderHints);
   wireContas("claude");

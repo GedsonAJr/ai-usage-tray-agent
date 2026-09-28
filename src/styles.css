@@ -704,7 +704,23 @@ svg.pv-ico { display: block; }
 /* Seção com mais respiro entre os itens (ex.: Aparência do widget). */
 .set-roomy { display: flex; flex-direction: column; gap: 22px; margin-bottom: 16px; }
 .set-roomy > .field { margin-bottom: 0; }
-.prov-toggles-row > .prov-toggle { flex: 1 1 0; }
+.prov-toggles-row > .prov-toggle, .prov-toggles-row > .prov-card { flex: 1 1 0; }
+/* Cartão do provedor com as contas dele embaixo (aba Widget): a moldura sai do
+   <label> do provedor e vai para o cartão, que também leva a lista de contas. */
+.prov-card { display: flex; flex-direction: column; border: 1px solid #3a3833; border-radius: 11px; background: #201f1c; }
+.prov-card > .prov-toggle { border: 0; background: none; }
+.prov-contas { display: flex; flex-direction: column; margin: 0 13px 6px; padding-top: 4px; border-top: 1px solid #34322d; }
+.prov-conta { display: flex; align-items: center; gap: 10px; padding: 7px 0; cursor: pointer; user-select: none; }
+.prov-conta-textos { margin-right: auto; min-width: 0; display: flex; flex-direction: column; }
+.prov-conta-nome, .prov-conta-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-conta-nome { font-size: 13.5px; font-weight: 600; color: #e8e6e1; }
+.prov-conta-email { font-size: 12px; color: #9a968d; }
+/* Provedor desligado: as contas ficam apagadas e sem clique (o switch de cima manda). */
+.prov-card.off .prov-contas { opacity: .45; pointer-events: none; }
+/* Switch menor, para itens abaixo de outro switch (as contas dentro do provedor). */
+.switch-sm .switch-track { width: 36px; height: 20px; border-radius: 10px; }
+.switch-sm .switch-track::after { top: 3px; left: 3px; width: 14px; height: 14px; }
+.switch-sm input:checked + .switch-track::after { transform: translateX(16px); }
 .check { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
 .check input { width: 18px; height: 18px; accent-color: #d97757; flex: none; cursor: pointer; margin: 0; }
 .check span { font-size: 14px; color: #e8e6e1; }
@@ -804,6 +820,35 @@ svg.pv-ico { display: block; }
 .wwin-pct { font-size: 17px; font-weight: 700; line-height: 1; }
 .wbar { height: 6px; background: rgba(0, 0, 0, .4); border-radius: 999px; margin: 5px 0; overflow: hidden; }
 .wbar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+
+/* ---- Várias contas no mesmo provedor (modos "completo" e "anel duplo") ---- */
+/* Botão ⇄ que alterna a conta. Sobreposto (não empurra o conteúdo) e só aparece
+   com o mouse sobre o card: `.sob-mouse` é posto por widget.ts, porque o card não
+   recebe o mouse (é área de arraste) e o `:hover` não o alcança. O botão é o único
+   ponto do card que recebe. No completo fica no canto de cima, na linha do nome;
+   no anel duplo, centralizado na altura. */
+.wprov { position: relative; }
+.wtroca { position: absolute; top: 6px; right: 7px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 50%; background: rgba(255, 255, 255, .12); color: #f2f0ea; cursor: pointer; pointer-events: auto;
+  opacity: 0; transform: translateX(4px); transition: opacity .15s ease, transform .15s ease, background .15s ease; }
+.wprov.sob-mouse .wtroca { opacity: 1; transform: none; }
+.wtroca:hover { background: rgba(255, 255, 255, .22); }
+.wprov-duplo .wtroca { top: 50%; transform: translate(4px, -50%); }
+.wprov-duplo.sob-mouse .wtroca { transform: translate(0, -50%); }
+/* Linha logo abaixo do card (fora dele), alinhada à esquerda: pontinhos (quantas
+   contas o provedor tem no widget e qual está na tela; a 1ª é a principal) e o
+   rótulo da conta atual, com reticências se não couber. A margem negativa a
+   aproxima do card, desfazendo parte do gap do .wdg-cards. */
+.wconta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: -4px; padding: 0 4px; pointer-events: none; }
+.wconta-apelido { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #b3afa6; }
+.wconta-pontos { display: flex; flex: none; gap: 4px; }
+.wconta-pontos i { width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .22); }
+.wconta-pontos i.on { background: #e8e6e1; }
+/* Conta com erro ou coletando no modo completo: o aviso fica sobre blocos
+   invisíveis das janelas, para o card ter a mesma altura do normal. */
+.wprov-nota-box { position: relative; }
+.wfantasma { visibility: hidden; }
+.wprov-nota-box > .wprov-note { position: absolute; inset: 0; display: flex; align-items: center; }
 .wwin-reset { font-size: 10.5px; color: #b3afa6; }
 /* Contagem regressiva (tempo restante) em branco nos três modos, para
    destacá-la do texto de reset ao redor. */
@@ -831,6 +876,11 @@ svg.pv-ico { display: block; }
 .wmin-item { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .wmin-pct { font-size: 13.5px; font-weight: 700; }
 .wmin-reset { font-size: 10.5px; color: #fff; }
+/* Títulos "Principal"/"Secundário" do modo mínimo com mais de uma conta. Colados
+   nas linhas que agrupam (a margem negativa desfaz parte do gap do .wdg-cards);
+   o segundo título ganha respiro para separar os grupos. */
+.wgrupo { font-size: 10px; font-weight: 600; letter-spacing: .3px; color: #b3afa6; margin: 0 2px -3px; pointer-events: none; }
+.wgrupo:not(:first-child) { margin-top: 4px; }
 
 /* ---- Modo "anelduplo": anéis concêntricos ---- */
 /* Mesmo princípio do "minimo": o conteúdo mantém o tamanho natural (filhos não

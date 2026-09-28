@@ -9,7 +9,7 @@
 |---|---|
 | 1. Fundação (contas extras + Configurações + Uso atual) | **concluída e validada** (limite de 2 contas por provedor) |
 | 2. Sessão automática acompanha a conta do CLI | **concluída e validada** |
-| 3. Widget flutuante escolhe as contas | a fazer |
+| 3. Widget flutuante escolhe as contas | **concluída e validada** |
 | 4. Barra de tarefas escolhe as contas | a fazer |
 | 5. Dashboard Codex com seletor de conta | **concluída e validada** |
 | 6. Envio escolhe a conta enviada | a fazer |
@@ -255,9 +255,35 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
 - README (fechamento): seção da sessão automática.
 
 ### Etapa 3: Widget flutuante escolhe as contas
-- `mostraNoWidget` por conta em `contas.json`. Se o campo estiver ausente, herda
-  `widget.mostraClaude` / `mostraCodex` do `config.json`, que continua lá intacto para a
-  versão antiga.
+- **Feito (1ª parte, a configuração):** `mostraNoWidget` por conta em `contas.json`
+  (`set_conta_widget`), só o "desligado" gravado. **Ajuste de desenho:** em vez de a conta
+  herdar o `widget.mostraClaude/Codex`, os dois convivem. O switch do provedor continua no
+  `config.json` (a versão antiga também o lê), e a conta aparece no widget se o provedor
+  **e** ela estiverem ligados. Na aba Widget, o cartão de cada provedor ganhou, com 2 ou
+  mais contas, um switch por conta (apelido com o e-mail embaixo), apagado quando o
+  provedor está desligado.
+- **Feito (modo mínimo):** `widget_state_value` manda também `contas` (a lista do "Uso
+  atual", com `mostra` = provedor ligado no widget E conta ligada). O mínimo agrupa pela
+  conta: título "Principal" com a principal de cada provedor, depois "Secundário" com as
+  secundárias, uma linha por conta no formato de sempre. Sem secundária visível, fica como
+  antes (sem títulos); seção vazia não aparece. Só o ícone do provedor, sem o nome.
+- **Feito (anel duplo):** um card por provedor, com a conta escolhida (a principal ao
+  abrir). Com mais de uma conta visível, uma **seta › no canto direito do card, que só
+  aparece com o mouse sobre ele**, alterna a conta (clicar no anel/ícone foi descartado:
+  não é um padrão reconhecível). Pontinhos na legenda mostram qual está na tela. Os cards
+  não recebem o mouse (área de arraste), então o card sob o cursor é achado pela posição
+  em `widget.ts` (`.sob-mouse`); a seta é o único ponto do card que recebe o clique. A
+  troca anima os arcos do valor antigo ao novo e a legenda entra com fade. O botão é ⇄
+  (duas setas opostas: uma seta só para a direita confundia quando a bolinha voltava).
+  Abaixo do card, fora dele, ficam os pontinhos e o apelido da conta na tela (reticências
+  se não couber). Conta com erro/coletando: o ícone numa caixa do tamanho dos anéis, para
+  o card ter a mesma altura do normal.
+- **Feito (completo):** o mesmo comportamento do anel duplo (`cardsPorConta` serve aos
+  dois modos): um card por provedor, ⇄ no canto de cima ao passar o mouse, pontinhos +
+  apelido abaixo, e a troca anima as barras do valor antigo ao novo. Erro/coletando: o
+  aviso fica sobre blocos invisíveis das janelas, para a mesma altura. Com isso, o estado
+  do widget perdeu `claude`/`codex`/`ordem`/`mostraClaude`/`mostraCodex`: os três modos
+  leem só `contas`.
 - `widget_state_value` emite a lista. `widget.ts` / `widget-modos.ts` passam a iterar, com
   ícone por `provedor`.
 - Rótulo: nome do provedor se só uma conta dele estiver visível, senão o rótulo da conta.
