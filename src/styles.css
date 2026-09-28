@@ -318,12 +318,85 @@ svg text { fill: #9a968d; font-size: 11px; }
   padding: 10px 14px; font-size: 13.5px; margin-top: 16px; }
 #usage-cards { display: grid; gap: 16px; margin-top: 18px; }
 .uprov { background: #232220; border: 1px solid #34322d; border-radius: 14px; padding: 18px; }
-.uprov.error { border-color: #5a3a33; }
 .uprov-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
-.uprov-name { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
-/* Rótulo da conta (apelido ou e-mail), quando o provedor tem mais de um card. */
-.uprov-conta { font-size: 13.5px; font-weight: 400; color: #9a968d; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.uprov-meta { font-size: 12.5px; color: #807c74; white-space: nowrap; }
+.uprov-name { font-size: 19.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; }
+/* Ícones do provedor no cabeçalho do card, na proporção do nome. */
+.uprov-name .spark { font-size: 20px; line-height: 1; }
+.uprov-name svg.pico { width: 22px; height: 22px; }
+/* Rótulo da conta (apelido, senão e-mail), do lado oposto ao nome do provedor. */
+.uprov-conta { font-size: 14px; font-weight: 500; color: #e8e6e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uprov-meta { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; color: #807c74; white-space: nowrap; }
+.uprov-meta > .uprov-conta { max-width: 260px; }
+.uprov-selo:empty { display: none; }
+/* "‹ Apelido ›": com mais de uma conta, as setas alternam a conta do card. Os
+   rótulos ficam empilhados na mesma célula, só o atual visível: a largura é a do
+   maior, então as setas não mudam de lugar ao alternar. */
+/* Pílula com fundo e borda próprios (mesmo tom dos blocos de janela), para o
+   seletor se destacar do cabeçalho. */
+.uconta-nav { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 3px; background: #2a2926; border: 1px solid #3a3833; border-radius: 999px; }
+.uconta-seta { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: none; border-radius: 999px; background: #34322d; color: #e8e6e1; cursor: pointer;
+  transition: background .18s ease, color .18s ease; }
+.uconta-seta:hover:not(:disabled) { background: #46433d; color: #fff; }
+/* A seta sem para onde ir (na conta da esquerda, a esquerda; na da direita, a
+   direita) fica apagada, sem sumir: as setas não mudam de lugar. */
+.uconta-seta:disabled { opacity: .3; cursor: default; }
+/* `overflow: hidden` recorta o apelido que entra e o que sai na troca de conta. */
+.uconta-rotulos { display: grid; min-width: 0; max-width: 220px; padding-inline: 6px; text-align: center; overflow: hidden; }
+.uconta-rotulos > .uprov-conta { grid-area: 1 / 1; visibility: hidden; }
+.uconta-rotulos > .uprov-conta.on { visibility: visible; }
+/* Corpo do card. É o contêiner das unidades `cqw` abaixo: a largura das colunas
+   sai da largura dele. */
+.uprov-corpo { container-type: inline-size; }
+/* Duas contas: duas colunas fixas, a principal à esquerda e a outra à direita. A
+   conta mostrada tem a coluna larga; a outra, a estreita, com o resumo. Trocar de
+   conta só inverte as larguras; o movimento (a divisória andando, as formas se
+   cruzando e a altura) é todo animado em `trocaConta` (usage.ts), por JS. */
+.ucontas { --lado: 150px; --vao: 14px; --largo: calc(100cqw - var(--lado) - var(--vao));
+  display: flex; gap: var(--vao); overflow: hidden; }
+/* Cada coluna empilha as duas formas da conta. A forma da vez fica no fluxo (e dá
+   a altura); a outra sai dele, invisível, e é recortada pela coluna. As larguras das
+   formas são fixas: durante a troca a coluna recorta o conteúdo, sem que ele se
+   reorganize a cada quadro. */
+.ucol { position: relative; display: grid; flex: none; width: var(--lado); overflow: hidden; }
+.ucol.larga { width: var(--largo); }
+.ucol-full { width: var(--largo); }
+.ucol-resumo { width: var(--lado); }
+.ucol.larga > .ucol-resumo, .ucol:not(.larga) > .ucol-full { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+/* Conta com erro ou sem dado: a moldura é da própria coluna (ver renderCard), então
+   é o mesmo container que cresce ou encolhe na troca. A borda é um box-shadow: não
+   ocupa espaço, e as formas de largura fixa continuam cabendo exatas. */
+.ucol.painel { background: #2a2926; border-radius: 10px; box-shadow: inset 0 0 0 1px #34322d; }
+.ucol.painel.error { box-shadow: inset 0 0 0 1px #5a3a33; }
+.ucol.painel > .ures { background: none; border-color: transparent; }
+.ucol.painel > .ucol-full { padding: 14px; }
+/* Resumo, no formato do "Anel duplo" do widget: o rótulo, os anéis e a % de cada
+   janela. Baixo o bastante (~115px) para não passar da altura dos blocos da conta
+   completa com o gráfico desligado. */
+/* Espaçamento por margem, e não por `gap`: o `gap` sobraria mesmo com o
+   `.ures-extra` fechado, deixando o resumo 10px mais alto sem motivo. */
+.ures { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 12px; }
+.ures.error { border-color: #5a3a33; }
+.ures-nome { font-size: 14px; font-weight: 600; color: #e8e6e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ures-nome + * { margin-top: 8px; }
+.ures-aneis { display: flex; align-items: center; gap: 10px; }
+.ures-aneis svg { flex: none; }
+.ures-aneis svg.dois { width: 54px; height: 54px; }
+/* Um anel só: o desenho do widget encolhe na mesma proporção (54/76). */
+.ures-aneis svg.um { width: 38px; height: 38px; }
+.ures-legs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ures-leg { display: flex; align-items: center; gap: 6px; }
+.ures-leg b { font-size: 15px; font-weight: 700; }
+.ures-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.ures-note { font-size: 13px; color: #9a968d; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ures-note.err { color: #e0816f; }
+/* Complemento do resumo com o gráfico ligado: o reset de cada janela, abaixo de
+   um divisor. Some e volta junto com os gráficos (mesma transição de `.uchart`);
+   a borda também encolhe, senão sobraria a linha de 1px. */
+.ures-extra { overflow: hidden; margin-top: 8px; padding-top: 8px; border-top: 1px solid #34322d; display: flex; flex-direction: column; gap: 6px;
+  transition: height .26s ease, opacity .2s ease, margin-block .26s ease, padding-block .26s ease, border-top-width .26s ease; }
+#usage-cards.sem-grafico .ures-extra { height: 0; opacity: 0; margin-block: 0; padding-block: 0; border-top-width: 0; }
+.ures-det-t { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #e8e6e1; font-weight: 600; margin-bottom: 2px; }
+.ures-det-l { font-size: 12px; color: #9a968d; line-height: 1.35; }
 .uprov-note { color: #9a968d; font-size: 14px; }
 .uprov-note.err { color: #e0816f; }
 .ubadge { font-size: 11px; border-radius: 6px; padding: 2px 8px; border: 1px solid #34322d; }
@@ -331,6 +404,12 @@ svg text { fill: #9a968d; font-size: 11px; }
 .ubadge.err { color: #e0816f; border-color: #5a3a33; background: #2a1f1c; }
 .uwins { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .uwins.single { grid-template-columns: 1fr; }
+/* Sessão e semanal no mesmo container, com um divisor recuado no meio. O container
+   passa a ser o `.uwins`; os blocos perdem a moldura própria. Com uma janela só
+   (`.single`), o bloco mantém a moldura dele. */
+.uwins.juntas { gap: 0; background: #2a2926; border: 1px solid #34322d; border-radius: 10px; }
+.uwins.juntas > .uwin { position: relative; background: none; border: 0; border-radius: 0; }
+.uwins.juntas > .uwin + .uwin::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 1px; background: #34322d; }
 .uwin { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 14px; }
 .uwin-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .uwin-label { color: #e8e6e1; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
@@ -676,6 +755,8 @@ svg.pv-ico { display: block; }
   .brand { padding: 0 12px 0 4px; }
   .nav { flex-direction: row; }
   .uwins { grid-template-columns: 1fr; }
+  /* Janelas juntas: empilhadas, o divisor vira horizontal. */
+  .uwins.juntas > .uwin + .uwin::before { top: 0; bottom: auto; left: 14px; right: 14px; width: auto; height: 1px; }
 }
 .uprov-name svg.pico { flex: none; }
 

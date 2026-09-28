@@ -49,6 +49,28 @@ do Dashboard Codex e nos cards. Mesma divisão do limite de contas: `contas::MAX
 corta o excedente ao gravar, e `settings.ts` (`MAX_APELIDO`) põe o `maxlength` do campo.
 Um apelido mais longo, salvo antes do limite, continua como está até ser editado.
 
+**Uso atual: um card por provedor** (mudança pedida depois da Etapa 1, que tinha um card
+por conta). O apelido (senão o e-mail) fica do lado oposto ao nome do provedor. Com mais de
+uma conta, o corpo tem duas colunas fixas, a principal à esquerda e a outra à direita: a
+conta mostrada ocupa a coluna larga, completa; a outra fica na estreita (150px), resumida
+no formato do "Anel duplo" do widget (rótulo, anéis e % por janela; com o gráfico ligado,
+também o "Reset em" de cada janela, que encolhe junto com os gráficos). O resumo cobre
+erro, "coletando" e a conta só com a semanal, e fica abaixo da altura dos blocos da conta
+completa, com e sem gráfico. Conta com erro: a moldura é a própria coluna (`.painel`),
+para o resumo "virar" o container do erro na troca; sem selo "erro", só a mensagem em
+vermelho, e o card não fica mais com borda vermelha. Com as duas janelas, sessão e
+semanal dividem um container só, com um divisor no meio. O cabeçalho mostra "‹ Apelido ›" sem dar a volta: na principal só a seta
+direita vale, na outra só a esquerda. Trocar inverte as larguras das colunas (transição
+de `grid-template-columns` em comprimentos, não `fr`, para interpolar) e cruza as formas
+completa/resumo; a altura acompanha por JS. Sem escolha, o card mostra a principal; a
+escolha vale enquanto a janela está aberta. O backend não mudou (`usage_value` continua mandando
+uma entrada por conta; o agrupamento é no `usage.ts`). Reordenar passa a mover o provedor
+inteiro, com as contas dele juntas. README (fechamento): seção "Uso atual".
+Para avaliar o layout sem duas contas pagas de cada provedor, o `npm run tauri dev` tem um
+seletor "Simular" no cabeçalho do Uso atual (`usage-sim.ts`: uma conta, duas janelas,
+erro, só semanal, coletando, e-mail longo). Ele só troca o que a tela desenha, bloqueia o
+reordenar e fica fora do build de release (`import.meta.env.DEV`).
+
 **Apelido oferecido depois do login.** No campo da lista ele passava despercebido. Ao
 **adicionar** uma conta (Claude ou Codex), a aba abre um modal opcional para o apelido
 ("Agora não", Esc ou clique fora fecham sem gravar). Reconectar uma conta que já estava na
