@@ -57,12 +57,19 @@ interface AppConfig {
   widget: WidgetConfig;
   servidor: ServerConfig;
 }
-/** Resultado da última reabertura automática de sessão (memória do backend). */
+/** Resultado da última reabertura automática de sessão (memória do backend) e a
+ * conta vigiada agora (calculada a cada leitura). */
 interface SessaoAutoStatus {
   ultimaTentativaEm?: string | null;
   ultimoOk?: boolean | null;
   ultimoErro?: string | null;
   emExecucao?: boolean;
+  /// Apelido (senão e-mail) da conta cuja janela de 5h decide o disparo.
+  contaVigiada?: string | null;
+  /// A conta vigiada é a do login do CLI (e não só a única do app).
+  contaDoCli?: boolean;
+  /// Por que a reabertura está parada, quando não há conta para vigiar.
+  aviso?: string | null;
 }
 interface SettingsData {
   autostart: boolean;
@@ -721,9 +728,9 @@ function syncProviderHints(): void {
 /// o bloco `providers` inteiro, então omitir o campo apagaria o valor do disco.
 let claudeSessaoAutoCliPath = "";
 
-/// Último status conhecido da reabertura automática. Só chega no `get_settings`
-/// (o backend guarda em memória), então é preservado entre os `sync` disparados
-/// pelo próprio toggle.
+/// Último status conhecido da reabertura automática. Chega no `get_settings` e na
+/// releitura de 5s (`get_sessao_auto_status`), então é preservado entre os `sync`
+/// disparados pelo próprio toggle.
 let lastSessaoAutoStatus: SessaoAutoStatus | undefined;
 
 /// Horários do modo agendado ("HH:MM", ordenados). Fonte da verdade da lista
@@ -808,6 +815,16 @@ function sessaoAutoModoDesc(): string {
 /// Mostra o resultado da última tentativa abaixo do toggle — é onde o usuário
 /// descobre que o CLI não está instalado ou que o login dele expirou — e revela
 /// as opções de modo/horários só quando a reabertura está ligada.
+/// Relê o status da reabertura automática (última tentativa e conta vigiada) sem
+/// recarregar o formulário inteiro.
+async function loadSessaoAutoStatus(): Promise<void> {
+  try {
+    syncSessaoAuto(await invoke<SessaoAutoStatus>("get_sessao_auto_status"));
+  } catch {
+    // transitório; mantém o último status
+  }
+}
+
 function syncSessaoAuto(status?: SessaoAutoStatus): void {
   if (status !== undefined) lastSessaoAutoStatus = status;
 
@@ -821,8 +838,23 @@ function syncSessaoAuto(status?: SessaoAutoStatus): void {
     !(ligado && agendado && claudeSessaoAutoHorarios.length === 0);
   $("set-claudeSessaoAutoModoDesc").textContent = sessaoAutoModoDesc();
 
-  const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
   const st = lastSessaoAutoStatus;
+  // Qual conta decide o disparo: a do login do CLI, que é onde o `claude -p` abre
+  // a janela. Sem ela, o aviso diz por que a reabertura está parada.
+  const conta = $("set-claudeSessaoAutoConta") as HTMLElement;
+  conta.classList.toggle("warn", !!st?.aviso);
+  if (st?.aviso) {
+    conta.textContent = st.aviso;
+  } else if (st?.contaVigiada) {
+    conta.textContent = st.contaDoCli
+      ? `Vigiando a conta ${st.contaVigiada}, a mesma em que o CLI está logado.`
+      : `Vigiando a conta ${st.contaVigiada}.`;
+  } else {
+    conta.textContent = "";
+  }
+  conta.hidden = conta.textContent === "";
+
+  const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
   if (!st?.ultimaTentativaEm) {
     el.hidden = true;
     el.textContent = "";
@@ -917,7 +949,11 @@ export function initSettings(): void {
   wireContas("codex");
   $("set-claudeHab").addEventListener("change", syncProviderHints);
   wireContas("claude");
-  $("set-claudeSessaoAuto").addEventListener("change", () => syncSessaoAuto());
+  // Ao ligar, já mostra a conta vigiada, sem esperar a releitura de 5s.
+  $("set-claudeSessaoAuto").addEventListener("change", () => {
+    syncSessaoAuto();
+    void loadSessaoAutoStatus();
+  });
   $("set-claudeSessaoAutoModo").addEventListener("change", () => syncSessaoAuto());
   $("set-claudeSessaoAutoAdd").addEventListener("click", addSessaoAutoHorario);
   // Enter no campo de hora adiciona, em vez de nada acontecer.
@@ -970,6 +1006,8 @@ export function initSettings(): void {
     for (const p of ["codex", "claude"] as const) {
       if (!PROVEDORES[p].loginEmAndamento) void loadContas(p);
     }
+    // A conta do CLI muda por fora (`claude /login`): relê a conta vigiada.
+    if ($<HTMLInputElement>("set-claudeSessaoAuto").checked) void loadSessaoAutoStatus();
   }, 5000);
 
   void loadSettings();

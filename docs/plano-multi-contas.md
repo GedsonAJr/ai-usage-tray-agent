@@ -8,7 +8,7 @@
 | Etapa | Estado |
 |---|---|
 | 1. Fundação (contas extras + Configurações + Uso atual) | **concluída e validada** (limite de 2 contas por provedor) |
-| 2. Sessão automática acompanha a conta do CLI | a fazer |
+| 2. Sessão automática acompanha a conta do CLI | **concluída e validada** |
 | 3. Widget flutuante escolhe as contas | a fazer |
 | 4. Barra de tarefas escolhe as contas | a fazer |
 | 5. Dashboard Codex com seletor de conta | **concluída e validada** |
@@ -207,10 +207,30 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
   - Loki só com a principal.
 
 ### Etapa 2: Sessão automática acompanha a conta do CLI
-- A conta vigiada passa a ser a de `organization_id` igual ao `organizationUuid` do
-  `~/.claude.json`.
-- Com uma única conta Claude, usar essa. Se nada bater, não disparar e avisar no status.
-- Teste da escolha.
+- A conta vigiada passa a ser a do login do CLI (`oauthAccount` do `.claude.json`), e não
+  a principal: é nela que o `claude -p` abre a janela. Vigiar outra disparava sem nunca
+  abrir a janela vigiada (gastando cota a cada cooldown) ou nunca disparava.
+- **Ajuste de desenho, decidido na implementação:**
+  - bate por **org + e-mail** (a identidade das contas), não só pela org: pessoas
+    diferentes numa org de time têm janelas diferentes. Sem o e-mail de um dos lados, a
+    org basta se sobrar uma conta só;
+  - o CLI numa conta que **não está no app**: não dispara e avisa, **mesmo com uma conta
+    só** (era o caso que gastava cota à toa). O plano original usava a única conta;
+  - login do CLI **ilegível** (sem arquivo ou sem login OAuth): com uma conta, usa ela
+    (como antes); com duas, não dispara e avisa.
+- Arquivo: `$CLAUDE_CONFIG_DIR/.claude.json` se a variável existir (a doc do Claude Code
+  diz que os caminhos de `~/.claude` vão para lá, sem citar este arquivo por nome), com o
+  `~/.claude.json` como segunda opção. A lista fica em `RuntimePaths.config_do_cli` para
+  os testes não lerem o arquivo real da máquina.
+- UI: a seção Sessão automática mostra a conta vigiada ("Vigiando a conta X, a mesma em
+  que o CLI está logado") ou o aviso. O status é calculado a cada leitura e relido a cada
+  5s (`get_sessao_auto_status`), porque a conta do CLI muda por fora (`/login`).
+- Testes: a escolha em todos os casos, a leitura do `.claude.json` (inclusive com chaves
+  que só diferem na caixa, como os caminhos em `projects`) e o teste da reabertura, que
+  agora monta a conta e o login do CLI na pasta temporária.
+- Validado com o app rodando. Roteiro: a seção mostra a conta certa; `claude /login` com a
+  outra conta troca a vigiada em até 5s; com o CLI numa conta fora do app, aparece o aviso.
+- README (fechamento): seção da sessão automática.
 
 ### Etapa 3: Widget flutuante escolhe as contas
 - `mostraNoWidget` por conta em `contas.json`. Se o campo estiver ausente, herda

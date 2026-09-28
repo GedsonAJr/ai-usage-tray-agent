@@ -238,6 +238,14 @@ pub fn identity(path: &Path) -> Option<(String, Option<String>)> {
     Some((identity, auth.email))
 }
 
+/// Org da conta gravada em `path`, ou `None` se nao ha' login valido.
+pub fn organization_id(path: &Path) -> Option<String> {
+    read_stored(path)
+        .filter(has_session)?
+        .organization_id
+        .filter(|org| !org.trim().is_empty())
+}
+
 /// Grava as credenciais capturadas (sessionKey + org) em `path` e devolve o status.
 pub fn store(
     path: &Path,

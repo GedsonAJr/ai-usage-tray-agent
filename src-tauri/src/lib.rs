@@ -454,6 +454,10 @@ struct RuntimePaths {
     config_dir: PathBuf,
     config_file: PathBuf,
     logs_dir: PathBuf,
+    /// Onde procurar o `.claude.json` do CLI do Claude, na ordem (ver
+    /// `arquivos_config_do_cli`). Campo, e nao constante, para os testes nao lerem
+    /// o arquivo real da maquina.
+    config_do_cli: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -584,6 +588,15 @@ struct SessaoAutoStatus {
     /// Ha' uma chamada ao CLI em andamento. A UI usa para mostrar "Testando…" e
     /// saber quando parar de consultar o resultado.
     em_execucao: bool,
+    /// Conta cuja janela de 5h decide o disparo (apelido, senao e-mail). Os tres
+    /// campos abaixo nao sao guardados: `status_da_sessao_auto` os calcula a cada
+    /// leitura, porque a conta do CLI muda por fora (`/login`).
+    conta_vigiada: Option<String>,
+    /// A conta vigiada e' a do login do CLI (`false`: o login do CLI nao pode ser
+    /// lido e ela e' a unica conta do app).
+    conta_do_cli: bool,
+    /// Por que a reabertura esta' parada, quando nao ha' conta para vigiar.
+    aviso: Option<String>,
 }
 
 /// Trava o estado da reabertura automatica, recuperando de envenenamento — mesma
@@ -748,6 +761,7 @@ pub fn run() {
             codex_login_cancel,
             claude_login,
             claude_auth_status,
+            get_sessao_auto_status,
             claude_login_cancel,
             claude_login_orgs,
             claude_select_org,
@@ -879,11 +893,11 @@ fn settings_value<R: Runtime>(app: &AppHandle<R>, paths: &RuntimePaths) -> Value
     let config = read_config(paths);
     let autostart = app.autolaunch().is_enabled().unwrap_or(false);
     // Resultado da ultima reabertura automatica de sessao, para a aba Claude
-    // mostrar se funcionou (e o porque quando nao). Vive so' em memoria, entao
-    // pode nao existir ainda (app recem-aberto).
+    // mostrar se funcionou (e o porque quando nao), e a conta vigiada. O resultado
+    // vive so' em memoria, entao pode nao existir ainda (app recem-aberto).
     let sessao_auto_status = app
         .try_state::<Arc<SharedState>>()
-        .map(|shared| lock_sessao_auto(&shared).status.clone())
+        .map(|shared| status_da_sessao_auto(paths, &shared))
         .unwrap_or_default();
 
     let mut value = json!({
@@ -2084,6 +2098,181 @@ const SESSAO_AUTO_COOLDOWN: Duration = Duration::from_secs(180);
 /// vira falha — nao pode ficar um `claude` pendurado a cada janela.
 const SESSAO_AUTO_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Login do CLI do Claude (o `oauthAccount` do `.claude.json`). E' a conta em que o
+/// `claude -p` da reabertura automatica abre a janela, seja qual for a principal
+/// do app.
+#[derive(Debug, Clone, PartialEq)]
+struct LoginDoCli {
+    organizacao: String,
+    email: Option<String>,
+    /// Nome da org, so' para o aviso.
+    nome_da_org: Option<String>,
+}
+
+/// Onde o CLI guarda o `.claude.json`: em `CLAUDE_CONFIG_DIR`, se definida (a doc
+/// do Claude Code diz que todo caminho de `~/.claude` passa para la'), senao no
+/// home. O `claude -p` herda o ambiente do app, entao le' o mesmo arquivo. O home
+/// fica tambem como segunda opcao, caso o arquivo nao esteja na pasta da variavel.
+fn arquivos_config_do_cli() -> Vec<PathBuf> {
+    let mut arquivos = Vec::new();
+    if let Some(dir) = env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        arquivos.push(PathBuf::from(dir).join(".claude.json"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        arquivos.push(home.join(".claude.json"));
+    }
+    arquivos
+}
+
+/// Le' o `oauthAccount` do conteudo do `.claude.json`. `None` sem login OAuth
+/// (ex.: CLI com chave de API) ou com o arquivo ilegivel.
+fn ler_login_do_cli(texto: &str) -> Option<LoginDoCli> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Arquivo {
+        oauth_account: Option<Conta>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Conta {
+        organization_uuid: Option<String>,
+        email_address: Option<String>,
+        organization_name: Option<String>,
+    }
+    let conta = serde_json::from_str::<Arquivo>(texto).ok()?.oauth_account?;
+    let organizacao = conta
+        .organization_uuid
+        .map(|org| org.trim().to_string())
+        .filter(|org| !org.is_empty())?;
+    Some(LoginDoCli {
+        organizacao,
+        email: conta.email_address,
+        nome_da_org: conta.organization_name,
+    })
+}
+
+/// Uma conta do Claude no app, com o que a escolha da conta vigiada compara.
+struct ContaClaude {
+    chave: String,
+    organizacao: Option<String>,
+    email: Option<String>,
+}
+
+/// Qual conta a reabertura automatica vigia (ver `escolher_conta_vigiada`).
+#[derive(Debug, PartialEq)]
+enum ContaVigiada {
+    /// `pelo_cli`: bate com o login do CLI. `false`: o login do CLI nao pode ser
+    /// lido e esta' e' a unica conta do app (o comportamento de antes).
+    Conta {
+        chave: String,
+        email: Option<String>,
+        pelo_cli: bool,
+    },
+    /// O CLI esta' logado numa conta que nao esta' conectada no app.
+    CliEmOutraConta,
+    /// Nao da' para saber qual das contas do app e' a do CLI.
+    CliDesconhecido,
+    SemConta,
+}
+
+/// Escolhe a conta cuja janela de 5h decide o disparo: a do CLI, porque e' nela que
+/// o `claude -p` abre a janela. Vigiar outra dispararia sem nunca abrir a janela
+/// vigiada (gastando cota a cada cooldown), ou nunca dispararia.
+///
+/// Bate por org + e-mail, a identidade das contas do app: pessoas diferentes numa
+/// mesma org de time tem janelas diferentes. Sem o e-mail de um dos lados, a org
+/// basta se sobrar uma conta so'.
+fn escolher_conta_vigiada(contas: &[ContaClaude], cli: Option<&LoginDoCli>) -> ContaVigiada {
+    let conta = |c: &ContaClaude, pelo_cli: bool| ContaVigiada::Conta {
+        chave: c.chave.clone(),
+        email: c.email.clone(),
+        pelo_cli,
+    };
+    if contas.is_empty() {
+        return ContaVigiada::SemConta;
+    }
+    let Some(cli) = cli else {
+        return match contas {
+            [unica] => conta(unica, false),
+            _ => ContaVigiada::CliDesconhecido,
+        };
+    };
+    let normaliza = |email: &str| email.trim().to_lowercase();
+    let candidatas: Vec<&ContaClaude> = contas
+        .iter()
+        .filter(|c| c.organizacao.as_deref() == Some(cli.organizacao.as_str()))
+        .filter(|c| match (&c.email, &cli.email) {
+            (Some(a), Some(b)) => normaliza(a) == normaliza(b),
+            _ => true,
+        })
+        .collect();
+    let exata = candidatas
+        .iter()
+        .find(|c| c.email.is_some() && cli.email.is_some());
+    match (exata, candidatas.as_slice()) {
+        (Some(c), _) | (None, [c]) => conta(c, true),
+        (None, []) => ContaVigiada::CliEmOutraConta,
+        (None, _) => ContaVigiada::CliDesconhecido,
+    }
+}
+
+/// A conta vigiada agora, a partir das contas do app e do login do CLI no disco.
+/// Devolve tambem o login do CLI, para o aviso dizer em que conta ele esta'.
+fn conta_vigiada(paths: &RuntimePaths) -> (ContaVigiada, Option<LoginDoCli>) {
+    let contas: Vec<ContaClaude> = contas::listar(&paths.config_dir, Provedor::Claude)
+        .into_iter()
+        .map(|conta| ContaClaude {
+            organizacao: claude_auth::organization_id(&conta.arquivo),
+            chave: conta.chave,
+            email: conta.email,
+        })
+        .collect();
+    let cli = paths
+        .config_do_cli
+        .iter()
+        .find_map(|arquivo| fs::read_to_string(arquivo).ok())
+        .and_then(|texto| ler_login_do_cli(&texto));
+    (escolher_conta_vigiada(&contas, cli.as_ref()), cli)
+}
+
+/// Status da reabertura automatica para a UI: o resultado da ultima tentativa (em
+/// memoria) mais a conta vigiada agora, ou o aviso de por que ela esta' parada.
+fn status_da_sessao_auto(paths: &RuntimePaths, shared: &SharedState) -> SessaoAutoStatus {
+    let mut status = lock_sessao_auto(shared).status.clone();
+    let (vigiada, cli) = conta_vigiada(paths);
+    match vigiada {
+        ContaVigiada::Conta {
+            chave,
+            email,
+            pelo_cli,
+        } => {
+            let prefs = contas::ler_prefs(&paths.config_dir);
+            status.conta_vigiada = prefs.apelido(&chave).map(str::to_string).or(email);
+            status.conta_do_cli = pelo_cli;
+        }
+        ContaVigiada::CliEmOutraConta => {
+            let (email, org) = cli.map_or((None, None), |cli| (cli.email, cli.nome_da_org));
+            let quem = match (email, org) {
+                (Some(email), Some(org)) => format!("{email} ({org})"),
+                (Some(email), None) => email,
+                (None, Some(org)) => format!("uma conta da org {org}"),
+                (None, None) => "outra conta".to_string(),
+            };
+            status.aviso = Some(format!(
+                "O CLI do Claude está logado em {quem}, que não está conectada no app. Conecte essa conta para a reabertura automática funcionar."
+            ));
+        }
+        ContaVigiada::CliDesconhecido => {
+            status.aviso = Some(
+                "Não foi possível saber em qual conta o CLI do Claude está logado. Com mais de uma conta no app, a reabertura automática fica parada."
+                    .to_string(),
+            );
+        }
+        ContaVigiada::SemConta => {}
+    }
+    status
+}
+
 /// Decide se e' hora de reabrir a janela de sessao do Claude e, se for, dispara a
 /// chamada **fora** do ciclo de coleta (o CLI leva segundos; segurar o
 /// `cycle_lock` congelaria tray/barra/widget nesse intervalo).
@@ -2105,10 +2294,17 @@ fn maybe_reopen_claude_session(
         return;
     }
 
+    // A janela que decide e' a da conta em que o CLI esta' logado, e nao a da
+    // principal: e' nela que o `claude -p` abre a sessao. Sem conta para vigiar,
+    // nao dispara; o motivo aparece no status (`status_da_sessao_auto`).
+    let ContaVigiada::Conta { chave, .. } = conta_vigiada(paths).0 else {
+        return;
+    };
     {
         let snapshot = lock_snapshot(shared);
         let sem_janela = snapshot
-            .principal_metric("claude")
+            .metrics
+            .get(&chave)
             .is_some_and(|metric| metric.status == "ok" && metric.reset_em.is_none());
         if !sem_janela {
             return;
@@ -3655,6 +3851,7 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
             config_dir: app_data.join(APP_NAME_WINDOWS),
             config_file: app_data.join(APP_NAME_WINDOWS).join("config.json"),
             logs_dir: local_app_data.join(APP_NAME_WINDOWS).join("logs"),
+            config_do_cli: arquivos_config_do_cli(),
         });
     }
 
@@ -3673,6 +3870,7 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
                 .join("state")
                 .join(APP_NAME_LINUX)
                 .join("logs"),
+            config_do_cli: arquivos_config_do_cli(),
         });
     }
 
@@ -4142,6 +4340,16 @@ fn claude_auth_status(paths: State<'_, RuntimePaths>) -> Value {
     status_das_contas(&paths.config_dir, Provedor::Claude)
 }
 
+/// Status da reabertura automatica (ultima tentativa e conta vigiada), relido pela
+/// aba Claude a cada poucos segundos: a conta do CLI muda por fora (`/login`).
+#[tauri::command]
+fn get_sessao_auto_status(
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+) -> SessaoAutoStatus {
+    status_da_sessao_auto(&paths, &shared)
+}
+
 /// Remove uma conta ("Remover"): apaga as credenciais e as preferencias dela. Se
 /// era a principal, a proxima do provedor assume.
 #[tauri::command]
@@ -4418,6 +4626,108 @@ mod tests {
     }
 
     #[test]
+    fn sessao_auto_vigia_a_conta_do_cli() {
+        let conta = |chave: &str, org: &str, email: Option<&str>| ContaClaude {
+            chave: chave.to_string(),
+            organizacao: Some(org.to_string()),
+            email: email.map(str::to_string),
+        };
+        let cli = |org: &str, email: Option<&str>| LoginDoCli {
+            organizacao: org.to_string(),
+            email: email.map(str::to_string),
+            nome_da_org: None,
+        };
+        let chave = |vigiada: ContaVigiada| match vigiada {
+            ContaVigiada::Conta {
+                chave, pelo_cli, ..
+            } => Ok((chave, pelo_cli)),
+            outra => Err(outra),
+        };
+        let pessoal = conta("claude:p", "org-p", Some("eu@gmail.com"));
+        let trabalho = conta("claude:t", "org-t", Some("eu@empresa.com"));
+        let colega = conta("claude:c", "org-t", Some("colega@empresa.com"));
+
+        // O CLI na conta de trabalho: vigia ela, mesmo que a principal seja a pessoal.
+        let duas = [pessoal, trabalho];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &duas,
+                Some(&cli("org-t", Some("EU@empresa.com ")))
+            )),
+            Ok(("claude:t".to_string(), true))
+        );
+        // Mesma org de time, pessoas diferentes: o e-mail decide.
+        let time = [colega, conta("claude:t", "org-t", Some("eu@empresa.com"))];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &time,
+                Some(&cli("org-t", Some("eu@empresa.com")))
+            )),
+            Ok(("claude:t".to_string(), true))
+        );
+        // O CLI numa conta que nao esta' no app: nao dispara, mesmo com uma conta so'.
+        let uma = [conta("claude:p", "org-p", Some("eu@gmail.com"))];
+        assert_eq!(
+            escolher_conta_vigiada(&uma, Some(&cli("org-x", Some("eu@gmail.com")))),
+            ContaVigiada::CliEmOutraConta
+        );
+        // A mesma org, mas outra pessoa: tambem e' outra conta.
+        assert_eq!(
+            escolher_conta_vigiada(&uma, Some(&cli("org-p", Some("outro@gmail.com")))),
+            ContaVigiada::CliEmOutraConta
+        );
+        // Conta do app sem e-mail: a org basta.
+        let sem_email = [conta("claude:p", "org-p", None)];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &sem_email,
+                Some(&cli("org-p", Some("eu@gmail.com")))
+            )),
+            Ok(("claude:p".to_string(), true))
+        );
+        // Login do CLI ilegivel: com uma conta, usa ela (como antes); com duas, para.
+        assert_eq!(
+            chave(escolher_conta_vigiada(&uma, None)),
+            Ok(("claude:p".to_string(), false))
+        );
+        assert_eq!(
+            escolher_conta_vigiada(&duas, None),
+            ContaVigiada::CliDesconhecido
+        );
+        assert_eq!(escolher_conta_vigiada(&[], None), ContaVigiada::SemConta);
+    }
+
+    #[test]
+    fn le_o_login_do_cli_do_claude_json() {
+        // Chaves que so' diferem na caixa (como os caminhos em `projects` no Windows)
+        // nao atrapalham a leitura.
+        let texto = r#"{
+            "projects": { "c:/x": {}, "C:/x": {} },
+            "oauthAccount": {
+                "organizationUuid": " org-1 ",
+                "emailAddress": "eu@empresa.com",
+                "organizationName": "Empresa",
+                "accountUuid": "ignorado"
+            }
+        }"#;
+        assert_eq!(
+            ler_login_do_cli(texto),
+            Some(LoginDoCli {
+                organizacao: "org-1".to_string(),
+                email: Some("eu@empresa.com".to_string()),
+                nome_da_org: Some("Empresa".to_string()),
+            })
+        );
+        // Sem login OAuth (ex.: CLI por chave de API), sem org ou arquivo invalido.
+        assert_eq!(ler_login_do_cli(r#"{"projects":{}}"#), None);
+        assert_eq!(
+            ler_login_do_cli(r#"{"oauthAccount":{"organizationUuid":""}}"#),
+            None
+        );
+        assert_eq!(ler_login_do_cli("nao e' json"), None);
+    }
+
+    #[test]
     fn parse_horario_aceita_hh_mm_e_recusa_o_resto() {
         assert_eq!(parse_horario("09:00"), Some(540));
         assert_eq!(parse_horario(" 9:05 "), Some(545));
@@ -4485,6 +4795,7 @@ mod tests {
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: Vec::new(),
         };
         let config = SessaoAutoConfig {
             habilitado: true,
@@ -4521,6 +4832,7 @@ exit /b 1
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: Vec::new(),
         };
         let config = SessaoAutoConfig {
             habilitado: true,
@@ -4560,10 +4872,30 @@ exit /b 1
         )
         .expect("gravar o CLI falso");
 
+        // A conta do app e o login do CLI na mesma conta: e' essa que a reabertura
+        // vigia (e nao o `.claude.json` real da maquina).
+        let identidade = claude_auth::identity_of("org-teste", Some("teste@exemplo.com"));
+        let (arquivo, chave) = contas::destino_do_login(&base, Provedor::Claude, &identidade)
+            .expect("destino da conta de teste");
+        claude_auth::store(
+            &arquivo,
+            "sk-teste",
+            "org-teste",
+            Some("teste@exemplo.com".to_string()),
+        )
+        .expect("gravar a conta de teste");
+        let config_do_cli = base.join("claude-cli.json");
+        fs::write(
+            &config_do_cli,
+            r#"{"oauthAccount":{"organizationUuid":"org-teste","emailAddress":"teste@exemplo.com"}}"#,
+        )
+        .expect("gravar o .claude.json de teste");
+
         let paths = RuntimePaths {
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: vec![config_do_cli],
         };
         let mut config = AppConfig::default();
         config.providers.claude.sessao_auto = SessaoAutoConfig {
@@ -4579,14 +4911,11 @@ exit /b 1
             pending_update: Mutex::new(None),
             sessao_auto: Mutex::new(SessaoAutoState::default()),
         });
-        // O gatilho do recurso: coleta bem-sucedida da principal sem janela de sessao.
+        // O gatilho do recurso: coleta bem-sucedida da conta do CLI sem janela de sessao.
         {
             let mut snapshot = lock_snapshot(&shared);
-            snapshot
-                .principais
-                .insert("claude".to_string(), "claude:teste".to_string());
             snapshot.metrics.insert(
-                "claude:teste".to_string(),
+                chave.clone(),
                 UsageMetric {
                     usuario: "teste".to_string(),
                     ferramenta: "claude".to_string(),
