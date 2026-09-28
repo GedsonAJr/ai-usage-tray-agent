@@ -1,6 +1,7 @@
-// Tela "Uso atual": mostra o uso de sessão (5h) e semanal (7d) do Claude e do
-// Codex, com barra de progresso, tempo restante para o reset (contagem ao vivo)
-// e a data/hora exata do reset. O subtítulo da página traz o "Atualizado há…" do
+// Tela "Uso atual": mostra o uso de sessão (5h) e semanal (7d) das contas do
+// Claude e do Codex (um card por provedor; com mais de uma conta, as setas do
+// cabeçalho alternam entre elas), com barra de progresso, tempo restante
+// para o reset (contagem ao vivo) e a data/hora exata do reset. O subtítulo da página traz o "Atualizado há…" do
 // dado em cache. Os dados vêm do comando IPC `get_usage`, que lê o mesmo snapshot
 // usado pelo tray e pela barra de tarefas (sem rede); a tela rebusca sozinha a
 // cada poucos segundos (não há mais botão de atualização manual).
@@ -15,34 +16,46 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
-  type ProviderUsage,
+  SEM_LIMITES,
+  TEXTO_SEM_LIMITES,
   type UsageMetric,
 } from "./usage-format";
 
 /// Um ponto do histórico de uso: instante (ISO) + % naquele momento.
-interface HistPoint {
+export interface HistPoint {
   t: string;
   pct: number;
 }
-/// Séries de histórico de um provedor: sessão (5h) e semanal (7d). Ambas cobrem
-/// as últimas ~5h (o backend só mantém essa janela, em memória).
-interface ProviderHistory {
+/// Séries de histórico de uma conta: sessão (5h) e semanal (7d). Ambas cobrem as
+/// últimas ~5h (o backend só mantém essa janela, em memória).
+export interface ProviderHistory {
   session: HistPoint[];
   weekly: HistPoint[];
 }
 
-interface Usage {
+/// Um card: uma conta conectada, ou o provedor sem conta (chave = a do provedor),
+/// que mostra "não conectado"/"desabilitado" como antes.
+export interface ContaUso {
+  /// "<provedor>:<id>" (ou só "<provedor>" no card do provedor sem conta).
+  chave: string;
+  provedor: "claude" | "codex";
+  /// Apelido, senão o e-mail. Nulo no card do provedor sem conta.
+  rotulo: string | null;
+  principal: boolean;
+  habilitado: boolean;
+  metric: UsageMetric | null;
+  history: ProviderHistory;
+}
+
+export interface Usage {
   paused: boolean;
   lastError: string | null;
   /// Exibir o mini gráfico (toggle da própria tela). Ausente = tratar como true.
   chartEnabled?: boolean;
   /// Mostrar o aviso de perda de dados ao desabilitar. Ausente = tratar como true.
   chartWarnOnDisable?: boolean;
-  /// Ordem de exibição dos provedores (chaves). Ausente = ordem canônica.
-  ordem?: string[];
-  claude: ProviderUsage;
-  codex: ProviderUsage;
-  history?: { claude: ProviderHistory; codex: ProviderHistory };
+  /// Cards já na ordem de exibição (a ordem salva vem aplicada pelo backend).
+  contas: ContaUso[];
 }
 
 let DATA: Usage | null = null;
@@ -180,65 +193,334 @@ function sparkline(series: HistPoint[], accent: string, key: string, label: stri
   </div>`;
 }
 
-/// Card de um provider, cobrindo os estados: desabilitado, sem dado ainda, erro
-/// de coleta, ou as duas janelas (sessão e semanal). O ícone do cabeçalho é o do
-/// provedor (Claude = spark; Codex = logo do Codex).
-function renderProvider(label: string, provKey: "claude" | "codex", prov: ProviderUsage): string {
-  const icon = label === "Codex" ? iconCodex() : ICON_CLAUDE;
-  // No modo reordenar, o card fica arrastável e ganha uma alça no cabeçalho.
-  const grip = reordering ? '<span class="uprov-grip" aria-hidden="true">⠿</span>' : "";
-  const open = (cls: string): string =>
-    `<div class="${cls}" data-prov="${provKey}"${reordering ? ' draggable="true"' : ""}>`;
-  const head = (meta: string): string =>
-    `<div class="uprov-head"><div class="uprov-name">${grip}${icon} ${label}</div><div class="uprov-meta">${meta}</div></div>`;
+const NOMES: Record<ContaUso["provedor"], string> = { claude: "Claude", codex: "Codex" };
 
+/// As contas de um provedor, na ordem dos cards. Um card por provedor; com mais de
+/// uma conta, as setas do cabeçalho alternam entre elas.
+interface Grupo {
+  provedor: ContaUso["provedor"];
+  contas: ContaUso[];
+}
+
+/// Conta mostrada no card de cada provedor. Sobrevive aos re-renders; sem escolha
+/// (ou se a conta sumiu), vale a principal.
+const selecionada = new Map<ContaUso["provedor"], string>();
+/// Há uma troca de conta animando: o render periódico espera ela acabar, senão
+/// reconstruiria o card no meio do movimento.
+let trocando = false;
+
+/// Agrupa as contas por provedor, na ordem em que o primeiro card de cada um vem.
+function agrupa(contas: ContaUso[]): Grupo[] {
+  const grupos: Grupo[] = [];
+  for (const c of contas) {
+    let g = grupos.find((x) => x.provedor === c.provedor);
+    if (!g) {
+      g = { provedor: c.provedor, contas: [] };
+      grupos.push(g);
+    }
+    g.contas.push(c);
+  }
+  return grupos;
+}
+
+function contaAtual(g: Grupo): ContaUso {
+  const chave = selecionada.get(g.provedor);
+  return g.contas.find((c) => c.chave === chave) ?? g.contas.find((c) => c.principal) ?? g.contas[0];
+}
+
+const rotuloDe = (c: ContaUso): string => c.rotulo ?? "Conta sem e-mail";
+
+/// Corpo do card de uma conta e o estado dela (classe do card e selo do
+/// cabeçalho), cobrindo: desabilitado, sem dado ainda, erro de coleta, ou as duas
+/// janelas (sessão e semanal). `nota`: o corpo é só um aviso de texto, sem as
+/// janelas (ver o `.painel` de `renderCard`).
+function corpoConta(prov: ContaUso): { estado: string; selo: string; html: string; nota: boolean } {
+  const label = NOMES[prov.provedor];
   if (!prov.habilitado) {
-    return `${open("uprov disabled")}${head('<span class="ubadge muted">desabilitado</span>')}
-      <div class="uprov-note">Habilite ${label} nas Configurações para coletar o uso.</div></div>`;
+    return {
+      estado: "disabled",
+      selo: '<span class="ubadge muted">desabilitado</span>',
+      html: `<div class="uprov-note">Habilite ${label} nas Configurações para coletar o uso.</div>`,
+      nota: true,
+    };
   }
   const m = prov.metric;
-  if (!m) {
-    return `${open("uprov")}${head("")}<div class="uprov-note">Coletando dados…</div></div>`;
-  }
+  if (!m) return { estado: "", selo: "", html: '<div class="uprov-note">Coletando dados…</div>', nota: true };
+  // Conta sem limites (ex.: Claude gratuito): aviso neutro, não erro.
+  if (m.status === SEM_LIMITES) return { estado: "", selo: "", html: `<div class="uprov-note">${TEXTO_SEM_LIMITES}</div>`, nota: true };
   if (m.status === "erro" || m.erro) {
-    return `${open("uprov error")}${head('<span class="ubadge err">erro</span>')}
-      <div class="uprov-note err">${escapeHtml(m.erro ?? "Falha na coleta.")}</div></div>`;
+    // Sem selo: a mensagem em vermelho já diz que é erro.
+    return {
+      estado: "error",
+      selo: "",
+      html: `<div class="uprov-note err">${escapeHtml(m.erro ?? "Falha na coleta.")}</div>`,
+      nota: true,
+    };
   }
   // O "atualizado há…" foi para o subtítulo da página (renderSub); o card não o repete.
-  const hist = DATA?.history?.[provKey];
+  const hist = prov.history;
+  const chartKey = prov.chave;
   const hasSession = m.uso_percentual !== undefined && m.uso_percentual !== null;
   const hasWeekly = m.uso_percentual_7d !== undefined && m.uso_percentual_7d !== null;
   // Só uma janela com dado (ex.: o Codex deixou de expor a sessão): o bloco vazio
   // some e o que tem dado ocupa o card inteiro. Sem nenhuma, mantém os dois "—".
   const single = hasSession !== hasWeekly;
-  const session = windowBlock("Sessão", m.uso_percentual, m.reset_em, true, hist?.session ?? [], provKey + "-session", single);
-  const weekly = windowBlock("Semanal", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], provKey + "-weekly", single);
+  const session = windowBlock("Sessão", m.uso_percentual, m.reset_em, true, hist?.session ?? [], chartKey + "-session", single);
+  const weekly = windowBlock("Semanal", m.uso_percentual_7d, m.reset_em_7d, false, hist?.weekly ?? [], chartKey + "-weekly", single);
   const wins = !single ? session + weekly : hasSession ? session : weekly;
-  return `${open("uprov")}${head("")}
-    <div class="uwins${single ? " single" : ""}">
-      ${wins}
+  // Com as duas janelas, elas dividem um container só, com um divisor no meio.
+  const classe = single ? " single" : " juntas";
+  return { estado: "", selo: "", html: `<div class="uwins${classe}">${wins}</div>`, nota: false };
+}
+
+/// Contas do grupo na ordem das colunas: a principal à esquerda, a outra à direita.
+function colunas(g: Grupo): ContaUso[] {
+  return [...g.contas].sort((a, b) => Number(b.principal) - Number(a.principal));
+}
+
+/// Lado direito do cabeçalho: o apelido (senão o e-mail) da conta mostrada e, com
+/// mais de uma conta, as setas "‹ Apelido ›". Os rótulos de todas as contas ficam
+/// empilhados na mesma célula, com só o atual visível: a largura é a do maior, e as
+/// setas não mudam de lugar ao alternar. As setas não dão a volta: na conta da
+/// esquerda só a direita vale, na da direita só a esquerda.
+function seletorConta(g: Grupo, atual: ContaUso): string {
+  // O card do provedor sem conta (desabilitado ou não conectado) não tem rótulo.
+  if (!atual.rotulo && g.contas.length < 2) return "";
+  if (g.contas.length < 2) return `<span class="uprov-conta">${escapeHtml(rotuloDe(atual))}</span>`;
+  const ordem = colunas(g);
+  const i = ordem.indexOf(atual);
+  const rotulos = ordem
+    .map((c) => `<span class="uprov-conta${c === atual ? " on" : ""}" data-conta="${escapeHtml(c.chave)}">${escapeHtml(rotuloDe(c))}</span>`)
+    .join("");
+  const seta = (dir: -1 | 1, titulo: string, d: string, ativa: boolean): string =>
+    `<button type="button" class="uconta-seta" data-dir="${dir}" aria-label="${titulo}" title="${titulo}"${ativa ? "" : " disabled"}>` +
+    `<svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+  return `<div class="uconta-nav">${seta(-1, "Conta anterior", "M7.5 3 4.5 6 7.5 9", i > 0)}` +
+    `<span class="uconta-rotulos" aria-live="polite">${rotulos}</span>` +
+    `${seta(1, "Próxima conta", "M4.5 3 7.5 6 4.5 9", i < ordem.length - 1)}</div>`;
+}
+
+/// Anéis concêntricos do resumo, na geometria do modo "Anel duplo" do widget
+/// (widget-modos.ts): sessão no anel externo, semanal no interno. Com uma janela
+/// só, fica só o anel interno, num desenho menor. O viewBox é o do widget; o
+/// tamanho na tela vem do CSS (`.ures-aneis svg`).
+const ANEL_EXT = { r: 31, circ: 194.78 };
+const ANEL_INT = { r: 22, circ: 138.23 };
+
+function aneis(wins: { pct: number; anel: { r: number; circ: number } }[]): string {
+  const lado = wins.length === 1 ? 54 : 76;
+  const c = lado / 2;
+  const circulo = (r: number, extra: string): string =>
+    `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke-width="6" ${extra}/>`;
+  const fundo = wins.map((w) => circulo(w.anel.r, 'stroke="#1c1b18"')).join("");
+  const frente = wins.map((w) => {
+    const feito = ((Math.max(0, Math.min(100, w.pct)) / 100) * w.anel.circ).toFixed(2);
+    return circulo(w.anel.r, `stroke="${barColor(w.pct)}" stroke-linecap="round" stroke-dasharray="${feito} ${w.anel.circ}"`);
+  }).join("");
+  // Gira -90° para o progresso começar no topo, como no widget.
+  return `<svg class="${wins.length === 1 ? "um" : "dois"}" viewBox="0 0 ${lado} ${lado}" style="transform:rotate(-90deg)" aria-hidden="true">${fundo}${frente}</svg>`;
+}
+
+/// Resumo de uma conta, na coluna estreita ao lado da conta mostrada, no formato do
+/// "Anel duplo" do widget: o rótulo, os anéis e a % de cada janela, sem gráfico nem
+/// reset (eles ficam na conta completa). Baixo o bastante para não passar da altura
+/// dos blocos da conta completa com o gráfico desligado. Cobre o erro de coleta, a
+/// conta ainda sem dado e a que só tem uma das janelas (ex.: o Codex só com a
+/// semanal): a janela sem dado simplesmente não aparece.
+function resumoConta(prov: ContaUso): string {
+  const nome = `<div class="ures-nome">${escapeHtml(rotuloDe(prov))}</div>`;
+  const m = prov.metric;
+  if (!prov.habilitado || !m) {
+    const texto = prov.habilitado ? "Coletando dados…" : "Desabilitado.";
+    return `<div class="ures ucol-resumo">${nome}<div class="ures-note">${texto}</div></div>`;
+  }
+  if (m.status === SEM_LIMITES) return `<div class="ures ucol-resumo">${nome}<div class="ures-note">${TEXTO_SEM_LIMITES}</div></div>`;
+  if (m.status === "erro" || m.erro) {
+    return `<div class="ures ucol-resumo error">${nome}` +
+      `<div class="ures-note err">${escapeHtml(m.erro ?? "Falha na coleta.")}</div></div>`;
+  }
+  type Win = { pct: number; anel: { r: number; circ: number }; titulo: string; reset: string | null | undefined; quando: string };
+  const wins: Win[] = [];
+  if (m.uso_percentual != null) {
+    // A sessão reseta no mesmo dia: só o horário basta (como no bloco completo).
+    const quando = m.reset_em ? `Horário: ${fmtTime(m.reset_em)}` : "";
+    wins.push({ pct: m.uso_percentual, anel: ANEL_EXT, titulo: "Sessão", reset: m.reset_em, quando });
+  }
+  if (m.uso_percentual_7d != null) {
+    const quando = m.reset_em_7d ? `Quando: ${fmtExact(m.reset_em_7d)}` : "";
+    wins.push({ pct: m.uso_percentual_7d, anel: ANEL_INT, titulo: "Semanal", reset: m.reset_em_7d, quando });
+  }
+  if (!wins.length) return `<div class="ures ucol-resumo">${nome}<div class="ures-note">Sem dados das janelas.</div></div>`;
+  if (wins.length === 1) wins[0].anel = ANEL_INT;
+  const ponto = (w: Win): string => `<span class="ures-dot" style="background:${barColor(w.pct)}"></span>`;
+  // A ordem das linhas (sessão, semanal) casa com a dos anéis (externo, interno);
+  // o nome da janela fica no tooltip.
+  const legenda = wins.map((w) =>
+    `<div class="ures-leg" title="${w.titulo}">${ponto(w)}<b style="color:${barColor(w.pct)}">${pctText(w.pct)}%</b></div>`).join("");
+  // Complemento para quando o gráfico está ligado: a conta completa fica alta, e o
+  // resumo mostra o reset de cada janela no espaço que sobraria vazio. Com o
+  // gráfico desligado ele encolhe junto com os gráficos (ver `.ures-extra` no CSS).
+  // Uma linha por janela, para não passar da altura dos blocos com gráfico; o
+  // horário/data exatos ficam no tooltip dela.
+  const extra = wins.map((w) => {
+    const reset = w.reset
+      ? `<div class="ures-det-l" title="${escapeHtml(w.quando)}">Reset em <span class="u-remain" data-reset="${escapeHtml(w.reset)}">${fmtRemaining(w.reset)}</span></div>`
+      : '<div class="ures-det-l">Sem horário de reset.</div>';
+    return `<div class="ures-det"><div class="ures-det-t">${ponto(w)}${w.titulo}</div>${reset}</div>`;
+  }).join("");
+  return `<div class="ures ucol-resumo">${nome}<div class="ures-aneis">${aneis(wins)}<div class="ures-legs">${legenda}</div></div>` +
+    `<div class="ures-extra">${extra}</div></div>`;
+}
+
+/// Card de um provedor. Com uma conta, o corpo é o dela, como sempre. Com duas, o
+/// corpo tem duas colunas fixas (a principal à esquerda, a outra à direita), e cada
+/// uma traz as duas formas da conta: a completa e o resumo. A conta mostrada fica
+/// com a coluna larga e a forma completa; a outra, com a estreita e o resumo.
+/// Trocar de conta só inverte as larguras (ver `trocaConta`). O ícone do cabeçalho
+/// é o do provedor (Claude = spark; Codex = logo do Codex).
+function renderCard(g: Grupo): string {
+  const atual = contaAtual(g);
+  const corpo = corpoConta(atual);
+  const label = NOMES[g.provedor];
+  const icon = g.provedor === "codex" ? iconCodex() : ICON_CLAUDE;
+  // No modo reordenar, o card fica arrastável e ganha uma alça no cabeçalho.
+  const grip = reordering ? '<span class="uprov-grip" aria-hidden="true">⠿</span>' : "";
+  let conteudo = corpo.html;
+  if (g.contas.length > 1) {
+    const ordem = colunas(g);
+    // Conta cujo corpo é só um aviso (erro, sem dado): a moldura passa a ser a
+    // própria coluna (`.painel`), e não cada forma. Assim, na troca, é o mesmo
+    // container que cresce ou encolhe com a coluna, e só o conteúdo dele se cruza
+    // (resumo ↔ aviso completo), em vez de um bloco apagar e outro surgir.
+    const cols = ordem.map((c) => {
+      const cc = corpoConta(c);
+      const painel = cc.nota ? ` painel${cc.estado === "error" ? " error" : ""}` : "";
+      return `<div class="ucol${c === atual ? " larga" : ""}${painel}" data-conta="${escapeHtml(c.chave)}">` +
+        `<div class="ucol-full">${cc.html}</div>${resumoConta(c)}</div>`;
+    }).join("");
+    conteudo = `<div class="ucontas">${cols}</div>`;
+  }
+  return `<div class="uprov${corpo.estado ? " " + corpo.estado : ""}" data-provedor="${g.provedor}"${reordering ? ' draggable="true"' : ""}>
+    <div class="uprov-head">
+      <div class="uprov-name">${grip}${icon} ${label}</div>
+      <div class="uprov-meta"><span class="uprov-selo">${corpo.selo}</span>${seletorConta(g, atual)}</div>
     </div>
+    <div class="uprov-corpo">${conteudo}</div>
   </div>`;
 }
 
-const PROVIDER_KEYS = ["claude", "codex"] as const;
-type ProviderKey = (typeof PROVIDER_KEYS)[number];
-
-/// Ordem dos provedores vinda do backend, saneada para conter exatamente as chaves
-/// conhecidas (fallback à ordem canônica). Espelha `normalize_provider_order`.
-function providerOrder(d: Usage): ProviderKey[] {
-  const from = (d.ordem ?? []).filter((k): k is ProviderKey => (PROVIDER_KEYS as readonly string[]).includes(k));
-  for (const k of PROVIDER_KEYS) if (!from.includes(k)) from.push(k);
-  return from;
+/// O apelido do cabeçalho acompanha o sentido da troca: indo para a direita, o
+/// novo entra pela direita e o antigo sai pela esquerda (e o contrário). A caixa
+/// dos rótulos recorta os dois, que não passam por cima das setas. O antigo já
+/// está com `visibility: hidden` pelo CSS; a animação o mantém visível enquanto sai.
+function animaRotulos(
+  card: HTMLElement,
+  sai: HTMLElement | null,
+  entra: HTMLElement | null,
+  dir: -1 | 1,
+  opts: KeyframeAnimationOptions,
+): Animation[] {
+  const caixa = card.querySelector<HTMLElement>(".uconta-rotulos");
+  if (!caixa || !sai || !entra || sai === entra) return [];
+  const d = caixa.offsetWidth;
+  return [
+    sai.animate([
+      { visibility: "visible", opacity: 1, transform: "none" },
+      { visibility: "visible", opacity: 0, transform: `translateX(${-dir * d}px)` },
+    ], opts),
+    entra.animate([
+      { opacity: 0, transform: `translateX(${dir * d}px)` },
+      { opacity: 1, transform: "none" },
+    ], opts),
+  ];
 }
 
-/// Timestamp de coleta mais recente entre os provedores habilitados com dado
-/// válido (ambos coletam no mesmo ciclo, então normalmente coincidem). `null`
-/// quando nenhum provedor tem dado coletado ainda.
+/// Duração e curva da troca de conta. A mesma curva da pílula das abas.
+const TROCA_MS = 420;
+const TROCA_EASE = "cubic-bezier(.32,.72,.35,1)";
+
+/// Leva o card para a conta da esquerda (`-1`) ou da direita (`1`). Sem render
+/// geral: as duas contas já estão no card, então basta inverter as larguras das
+/// colunas e animar a passagem:
+/// - a largura de cada coluna, medida antes e depois: a divisória anda, a coluna
+///   que cresce revela a forma completa e a que encolhe a recorta;
+/// - as formas: a que sai apaga na primeira metade, a que entra acende na segunda,
+///   sem as duas ficarem meio transparentes uma sobre a outra;
+/// - a altura, que muda quando as contas têm corpos de tamanhos diferentes (ex.:
+///   erro vs. as duas janelas).
+/// É por JS, e não por transição de CSS, porque a transição de largura de trilho
+/// do grid não anima em todo WebView: as colunas trocavam de uma vez.
+function trocaConta(card: HTMLElement, dir: -1 | 1): void {
+  if (!DATA || trocando) return;
+  const g = agrupa(DATA.contas).find((x) => x.provedor === card.dataset.provedor);
+  if (!g || g.contas.length < 2) return;
+  const ordem = colunas(g);
+  const j = ordem.indexOf(contaAtual(g)) + dir;
+  if (j < 0 || j >= ordem.length) return;
+  const nova = ordem[j];
+  selecionada.set(g.provedor, nova.chave);
+  const corpo = corpoConta(nova);
+
+  // Cabeçalho: estado do card, selo, rótulo e quais setas valem.
+  card.classList.remove("error", "disabled");
+  if (corpo.estado) card.classList.add(corpo.estado);
+  (card.querySelector(".uprov-selo") as HTMLElement).innerHTML = corpo.selo;
+  const rotulos = [...card.querySelectorAll<HTMLElement>(".uprov-conta[data-conta]")];
+  const rotuloSai = rotulos.find((r) => r.classList.contains("on")) ?? null;
+  const rotuloEntra = rotulos.find((r) => r.dataset.conta === nova.chave) ?? null;
+  rotulos.forEach((r) => r.classList.toggle("on", r === rotuloEntra));
+  card.querySelectorAll<HTMLButtonElement>(".uconta-seta").forEach((b) => {
+    b.disabled = b.dataset.dir === "-1" ? j === 0 : j === ordem.length - 1;
+  });
+  // A seta clicada fica desabilitada e perde o foco: ele passa para a outra, que
+  // é a próxima ação possível.
+  card.querySelector<HTMLButtonElement>(".uconta-seta:not(:disabled)")?.focus();
+
+  const grade = card.querySelector(".ucontas") as HTMLElement;
+  const cols = [...grade.querySelectorAll<HTMLElement>(".ucol")];
+  // As formas visíveis agora: são as que vão sair.
+  const visiveis = (): HTMLElement[] =>
+    cols.map((col) => col.querySelector<HTMLElement>(col.classList.contains("larga") ? ".ucol-full" : ".ucol-resumo")!);
+  const saem = visiveis();
+  const h0 = grade.offsetHeight;
+  const w0 = cols.map((col) => col.offsetWidth);
+  cols.forEach((col) => col.classList.toggle("larga", col.dataset.conta === nova.chave));
+  const entram = visiveis();
+  const h1 = grade.offsetHeight;
+  const w1 = cols.map((col) => col.offsetWidth);
+
+  // "Reduzir movimento" do sistema: a troca fica instantânea. A regra global do CSS
+  // não alcança animações feitas por JS (Web Animations).
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  trocando = true;
+  const opts: KeyframeAnimationOptions = { duration: TROCA_MS, easing: TROCA_EASE };
+  const animacoes = [
+    grade.animate([{ height: `${h0}px` }, { height: `${h1}px` }], opts),
+    ...cols.map((col, k) => col.animate([{ width: `${w0[k]}px` }, { width: `${w1[k]}px` }], opts)),
+    // O CSS já deixou quem sai invisível e quem entra visível: as animações partem
+    // do estado anterior no mesmo quadro, então nada pisca. `backwards` segura quem
+    // entra apagado durante o atraso.
+    ...saem.map((f) => f.animate([{ opacity: 1 }, { opacity: 0 }], { duration: TROCA_MS * 0.45, easing: "ease-out" })),
+    ...entram.map((f) => f.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: TROCA_MS * 0.55, delay: TROCA_MS * 0.35, easing: "ease-in-out", fill: "backwards",
+    })),
+    ...animaRotulos(card, rotuloSai, rotuloEntra, dir, opts),
+  ];
+  const fim = (): void => {
+    trocando = false;
+    // Um render que chegou durante a troca foi adiado: aplica agora.
+    render();
+  };
+  void Promise.all(animacoes.map((a) => a.finished)).then(fim, fim);
+}
+
+/// Timestamp de coleta mais recente entre as contas habilitadas com dado válido
+/// (todas coletam no mesmo ciclo, então normalmente coincidem). `null` quando
+/// nenhuma conta tem dado coletado ainda.
 function freshestCollected(): string | null {
   if (!DATA) return null;
   let best: string | null = null;
-  for (const prov of [DATA.claude, DATA.codex]) {
+  for (const prov of DATA.contas) {
     const m = prov.metric;
     if (!prov.habilitado || !m || m.status === "erro" || m.erro || !m.coletado_em) continue;
     if (best === null || new Date(m.coletado_em).getTime() > new Date(best).getTime()) {
@@ -269,17 +551,16 @@ function tick(): void {
 }
 
 /// Assinatura barata do snapshot para decidir se vale reconstruir os cards.
-/// Cobre o que muda o desenho: pausa, habilitado, métricas de cada provedor e o
-/// tamanho/última amostra de cada série do histórico.
+/// Cobre o que muda o desenho: pausa, a ordem e o rótulo dos cards, habilitado,
+/// a métrica de cada conta e o tamanho/última amostra de cada série do histórico.
 function signature(d: Usage): string {
   const m = (x: UsageMetric | null): string =>
     x ? `${x.coletado_em}|${x.uso_percentual ?? ""}|${x.uso_percentual_7d ?? ""}|${x.status}|${x.erro ?? ""}` : "none";
   const h = (s?: HistPoint[]): string => (s && s.length ? `${s.length}:${s[s.length - 1].t}` : "0");
-  const hi = d.history;
   return [
-    d.paused, d.chartEnabled !== false, reordering, providerOrder(d).join(","),
-    d.claude.habilitado, m(d.claude.metric), d.codex.habilitado, m(d.codex.metric),
-    h(hi?.claude.session), h(hi?.claude.weekly), h(hi?.codex.session), h(hi?.codex.weekly),
+    d.paused, d.chartEnabled !== false, reordering,
+    ...d.contas.map((c) =>
+      [c.chave, c.rotulo ?? "", c.habilitado, m(c.metric), h(c.history?.session), h(c.history?.weekly)].join("|")),
   ].join("~");
 }
 
@@ -349,6 +630,9 @@ function render(): void {
   // Antes do innerHTML abaixo: os cards novos já nascem no estado certo, em vez
   // de nascerem abertos e fechar num segundo momento.
   aplicaGrafico();
+  // Uma troca de conta animando: reconstruir agora cortaria o movimento. Ela chama
+  // o render de novo ao terminar.
+  if (trocando) return;
   // Reconstrói os cards só quando os dados mudam; entre reloads iguais (a cada 2s)
   // apenas roda o tick, preservando o hover do gráfico e poupando trabalho.
   const sig = signature(DATA);
@@ -359,21 +643,24 @@ function render(): void {
     ? '<div class="ubanner">⏸ Envio ao Loki pausado. Os dados continuam sendo coletados e exibidos aqui; retome o envio na tela "Envio de dados" ou no menu do tray.</div>'
     : "";
   CHARTS.clear();
-  const labels: Record<ProviderKey, string> = { claude: "Claude", codex: "Codex" };
   el("usage-cards").classList.toggle("reordering", reordering);
-  el("usage-cards").innerHTML = providerOrder(DATA)
-    .map((k) => renderProvider(labels[k], k, (DATA as Usage)[k]))
-    .join("");
+  el("usage-cards").innerHTML = agrupa(DATA.contas).map(renderCard).join("");
   renderSub();
   el("usage-foot").textContent = "";
   wireCharts();
   tick();
 }
 
+/// Só no `npm run tauri dev`: troca os dados pelos do cenário de simulação escolhido
+/// no cabeçalho (ver usage-sim.ts). Nulo no build de release.
+let simula: ((dados: Usage) => Usage) | null = null;
+let simulando: (() => boolean) | null = null;
+
 /// Busca o snapshot pelo IPC e re-renderiza. Barata (sem rede no backend).
 export async function loadUsage(): Promise<void> {
   try {
     DATA = await invoke<Usage>("get_usage");
+    if (simula) DATA = simula(DATA);
   } catch (e) {
     el("usage-foot").textContent = "Falha ao carregar uso: " + (e instanceof Error ? e.message : String(e));
     return;
@@ -479,7 +766,7 @@ function bindReorder(): void {
     if (!reordering) return;
     const card = cardAt(e);
     if (!card) return;
-    draggedKey = card.dataset.prov ?? null;
+    draggedKey = card.dataset.provedor ?? null;
     card.classList.add("dragging");
     (e as DragEvent).dataTransfer?.setData("text/plain", draggedKey ?? "");
   });
@@ -488,34 +775,41 @@ function bindReorder(): void {
     e.preventDefault(); // habilita o drop
     const card = cardAt(e);
     cards.querySelectorAll(".uprov.drop-target").forEach((n) => n.classList.remove("drop-target"));
-    if (card && card.dataset.prov !== draggedKey) card.classList.add("drop-target");
+    if (card && card.dataset.provedor !== draggedKey) card.classList.add("drop-target");
   });
   cards.addEventListener("dragend", clearMarks);
   cards.addEventListener("drop", (e) => {
     if (!reordering || !draggedKey || !DATA) return;
     e.preventDefault();
-    const targetKey = cardAt(e)?.dataset.prov;
+    const targetKey = cardAt(e)?.dataset.provedor;
     const dragged = draggedKey;
     draggedKey = null;
     clearMarks();
     if (!targetKey || targetKey === dragged) return;
-    // Move o arrastado para a posição do alvo, usando os índices da ordem ORIGINAL
-    // (remove na origem e insere no índice do alvo). Para 2 itens vira uma troca;
-    // para N, uma reordenação correta nos dois sentidos.
-    const order: string[] = providerOrder(DATA);
-    const from = order.indexOf(dragged);
-    const to = order.indexOf(targetKey);
+    if (simulando?.()) {
+      el("usage-foot").textContent = "Reordenar não grava durante a simulação.";
+      return;
+    }
+    // Move o provedor arrastado para a posição do alvo, usando os índices da ordem
+    // ORIGINAL (remove na origem e insere no índice do alvo). Para 2 itens vira uma
+    // troca; para N, uma reordenação correta nos dois sentidos.
+    const grupos = agrupa(DATA.contas);
+    const provedores = grupos.map((g) => g.provedor as string);
+    const from = provedores.indexOf(dragged);
+    const to = provedores.indexOf(targetKey);
     if (from < 0 || to < 0 || from === to) return;
-    order.splice(from, 1);
-    order.splice(to, 0, dragged);
-    void applyOrder(order);
+    const [movido] = grupos.splice(from, 1);
+    grupos.splice(to, 0, movido);
+    // A ordem salva é por conta: cada provedor leva as contas dele juntas, na ordem
+    // em que já estavam (a das setas).
+    void applyOrder(grupos.flatMap((g) => g.contas.map((c) => c.chave)));
   });
 }
 
 /// Persiste a nova ordem no backend e re-renderiza.
 async function applyOrder(order: string[]): Promise<void> {
   try {
-    DATA = await invoke<Usage>("set_providers_order", { order });
+    DATA = await invoke<Usage>("set_contas_ordem", { order });
     lastSig = "";
     render();
   } catch (err) {
@@ -531,6 +825,26 @@ export function initUsage(): void {
 
   bindChartToggle();
   bindReorder();
+  // Simulação de contas para avaliar o layout. `import.meta.env.DEV` é falso no
+  // build de release: o Vite descarta este ramo e o módulo nem entra no pacote.
+  if (import.meta.env.DEV) {
+    void import("./usage-sim").then((sim) => {
+      simula = sim.aplica;
+      simulando = sim.ativa;
+      sim.montaSeletor(() => {
+        selecionada.clear();
+        void loadUsage();
+      });
+      void loadUsage();
+    });
+  }
+  // Setas "‹ Apelido ›" do cabeçalho: alternam a conta do card. Valem também no
+  // navegador, onde o reordenar não existe.
+  el("usage-cards").addEventListener("click", (e) => {
+    const seta = (e.target as HTMLElement).closest<HTMLElement>(".uconta-seta");
+    const card = seta?.closest<HTMLElement>(".uprov");
+    if (seta && card) trocaConta(card, seta.dataset.dir === "-1" ? -1 : 1);
+  });
 
   // A cada 1s atualiza a contagem regressiva e o frescor (do dado em cache); a
   // cada 2s rebusca o snapshot. O rebusque precisa ser mais frequente que o

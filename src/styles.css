@@ -143,6 +143,36 @@ h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap:
 .range-custom .rc-apply { background: #d97757; color: #1b1a18; font-weight: 600; }
 .range-custom .rc-apply:hover:not(:disabled) { background: #e0876a; }
 .range-custom .rc-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Cabeçalho do Dashboard Codex: título à esquerda, seletor de conta à direita.
+   O seletor fica fora do fluxo, ancorado à direita e centrado no título com um
+   deslocamento para baixo (o "+ 3px"). Assim o tamanho do botão e o deslocamento
+   não mexem no título nem no painel, e o seletor aparecer depois da 1ª carga (só
+   existe com 2 ou mais contas) não empurra nada. O z-index é necessário porque
+   o transform cria um contexto de empilhamento: sem ele, os botões das abas
+   (z-index 1) passariam por cima do menu aberto. */
+.dash-head { position: relative; }
+.conta-select { position: absolute; right: 0; top: 50%; transform: translateY(calc(-50% + 3px)); z-index: 30; }
+.conta-select-btn { display: flex; align-items: center; gap: 10px; max-width: 280px; background: #232220; border: 1px solid #34322d; color: #e8e6e1; border-radius: 10px; padding: 9px 14px; font: inherit; font-size: 14px; line-height: 20px; cursor: pointer;
+  transition: background .18s ease, border-color .18s ease; }
+.conta-select-btn:hover, .conta-select-btn[aria-expanded="true"] { background: #2e2d29; border-color: #46433d; }
+.conta-select-rotulo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conta-select-seta { flex: none; color: #9a968d; transition: transform .18s ease; }
+.conta-select-btn[aria-expanded="true"] .conta-select-seta { transform: rotate(180deg); }
+/* Mesmo visual do popover do range personalizado. Alinhado à direita do botão,
+   que fica na borda da tela: crescer para a esquerda é o que mantém o menu
+   inteiro visível com um e-mail longo. */
+@keyframes conta-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.conta-select-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 100%; width: max-content; max-width: 320px; background: #38362f; border: 1px solid #5a564c; border-radius: 10px; padding: 4px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.5); animation: conta-menu-in .14s ease-out; }
+.conta-op { display: flex; align-items: center; gap: 12px; width: 100%; background: transparent; border: none; border-radius: 7px; padding: 7px 10px; text-align: left; font: inherit; color: #e8e6e1; cursor: pointer; }
+.conta-op:hover, .conta-op:focus-visible { background: #46433d; outline: none; }
+.conta-op-textos { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.conta-op-nome, .conta-op-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conta-op-nome { font-size: 13.5px; }
+.conta-op-email { font-size: 12px; color: #9a968d; margin-top: 1px; }
+.conta-op-check { flex: none; color: #d97757; visibility: hidden; }
+.conta-op[aria-selected="true"] .conta-op-check { visibility: visible; }
 .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
 .card { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 10px 12px; }
 .card .lbl { color: #9a968d; font-size: 13px; }
@@ -288,10 +318,85 @@ svg text { fill: #9a968d; font-size: 11px; }
   padding: 10px 14px; font-size: 13.5px; margin-top: 16px; }
 #usage-cards { display: grid; gap: 16px; margin-top: 18px; }
 .uprov { background: #232220; border: 1px solid #34322d; border-radius: 14px; padding: 18px; }
-.uprov.error { border-color: #5a3a33; }
 .uprov-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
-.uprov-name { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.uprov-meta { font-size: 12.5px; color: #807c74; white-space: nowrap; }
+.uprov-name { font-size: 19.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; }
+/* Ícones do provedor no cabeçalho do card, na proporção do nome. */
+.uprov-name .spark { font-size: 20px; line-height: 1; }
+.uprov-name svg.pico { width: 22px; height: 22px; }
+/* Rótulo da conta (apelido, senão e-mail), do lado oposto ao nome do provedor. */
+.uprov-conta { font-size: 14px; font-weight: 500; color: #e8e6e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uprov-meta { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12.5px; color: #807c74; white-space: nowrap; }
+.uprov-meta > .uprov-conta { max-width: 260px; }
+.uprov-selo:empty { display: none; }
+/* "‹ Apelido ›": com mais de uma conta, as setas alternam a conta do card. Os
+   rótulos ficam empilhados na mesma célula, só o atual visível: a largura é a do
+   maior, então as setas não mudam de lugar ao alternar. */
+/* Pílula com fundo e borda próprios (mesmo tom dos blocos de janela), para o
+   seletor se destacar do cabeçalho. */
+.uconta-nav { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 3px; background: #2a2926; border: 1px solid #3a3833; border-radius: 999px; }
+.uconta-seta { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; border: none; border-radius: 999px; background: #34322d; color: #e8e6e1; cursor: pointer;
+  transition: background .18s ease, color .18s ease; }
+.uconta-seta:hover:not(:disabled) { background: #46433d; color: #fff; }
+/* A seta sem para onde ir (na conta da esquerda, a esquerda; na da direita, a
+   direita) fica apagada, sem sumir: as setas não mudam de lugar. */
+.uconta-seta:disabled { opacity: .3; cursor: default; }
+/* `overflow: hidden` recorta o apelido que entra e o que sai na troca de conta. */
+.uconta-rotulos { display: grid; min-width: 0; max-width: 220px; padding-inline: 6px; text-align: center; overflow: hidden; }
+.uconta-rotulos > .uprov-conta { grid-area: 1 / 1; visibility: hidden; }
+.uconta-rotulos > .uprov-conta.on { visibility: visible; }
+/* Corpo do card. É o contêiner das unidades `cqw` abaixo: a largura das colunas
+   sai da largura dele. */
+.uprov-corpo { container-type: inline-size; }
+/* Duas contas: duas colunas fixas, a principal à esquerda e a outra à direita. A
+   conta mostrada tem a coluna larga; a outra, a estreita, com o resumo. Trocar de
+   conta só inverte as larguras; o movimento (a divisória andando, as formas se
+   cruzando e a altura) é todo animado em `trocaConta` (usage.ts), por JS. */
+.ucontas { --lado: 150px; --vao: 14px; --largo: calc(100cqw - var(--lado) - var(--vao));
+  display: flex; gap: var(--vao); overflow: hidden; }
+/* Cada coluna empilha as duas formas da conta. A forma da vez fica no fluxo (e dá
+   a altura); a outra sai dele, invisível, e é recortada pela coluna. As larguras das
+   formas são fixas: durante a troca a coluna recorta o conteúdo, sem que ele se
+   reorganize a cada quadro. */
+.ucol { position: relative; display: grid; flex: none; width: var(--lado); overflow: hidden; }
+.ucol.larga { width: var(--largo); }
+.ucol-full { width: var(--largo); }
+.ucol-resumo { width: var(--lado); }
+.ucol.larga > .ucol-resumo, .ucol:not(.larga) > .ucol-full { position: absolute; top: 0; left: 0; opacity: 0; pointer-events: none; }
+/* Conta com erro ou sem dado: a moldura é da própria coluna (ver renderCard), então
+   é o mesmo container que cresce ou encolhe na troca. A borda é um box-shadow: não
+   ocupa espaço, e as formas de largura fixa continuam cabendo exatas. */
+.ucol.painel { background: #2a2926; border-radius: 10px; box-shadow: inset 0 0 0 1px #34322d; }
+.ucol.painel.error { box-shadow: inset 0 0 0 1px #5a3a33; }
+.ucol.painel > .ures { background: none; border-color: transparent; }
+.ucol.painel > .ucol-full { padding: 14px; }
+/* Resumo, no formato do "Anel duplo" do widget: o rótulo, os anéis e a % de cada
+   janela. Baixo o bastante (~115px) para não passar da altura dos blocos da conta
+   completa com o gráfico desligado. */
+/* Espaçamento por margem, e não por `gap`: o `gap` sobraria mesmo com o
+   `.ures-extra` fechado, deixando o resumo 10px mais alto sem motivo. */
+.ures { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 12px; }
+.ures.error { border-color: #5a3a33; }
+.ures-nome { font-size: 14px; font-weight: 600; color: #e8e6e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ures-nome + * { margin-top: 8px; }
+.ures-aneis { display: flex; align-items: center; gap: 10px; }
+.ures-aneis svg { flex: none; }
+.ures-aneis svg.dois { width: 54px; height: 54px; }
+/* Um anel só: o desenho do widget encolhe na mesma proporção (54/76). */
+.ures-aneis svg.um { width: 38px; height: 38px; }
+.ures-legs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ures-leg { display: flex; align-items: center; gap: 6px; }
+.ures-leg b { font-size: 15px; font-weight: 700; }
+.ures-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.ures-note { font-size: 13px; color: #9a968d; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ures-note.err { color: #e0816f; }
+/* Complemento do resumo com o gráfico ligado: o reset de cada janela, abaixo de
+   um divisor. Some e volta junto com os gráficos (mesma transição de `.uchart`);
+   a borda também encolhe, senão sobraria a linha de 1px. */
+.ures-extra { overflow: hidden; margin-top: 8px; padding-top: 8px; border-top: 1px solid #34322d; display: flex; flex-direction: column; gap: 6px;
+  transition: height .26s ease, opacity .2s ease, margin-block .26s ease, padding-block .26s ease, border-top-width .26s ease; }
+#usage-cards.sem-grafico .ures-extra { height: 0; opacity: 0; margin-block: 0; padding-block: 0; border-top-width: 0; }
+.ures-det-t { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #e8e6e1; font-weight: 600; margin-bottom: 2px; }
+.ures-det-l { font-size: 12px; color: #9a968d; line-height: 1.35; }
 .uprov-note { color: #9a968d; font-size: 14px; }
 .uprov-note.err { color: #e0816f; }
 .ubadge { font-size: 11px; border-radius: 6px; padding: 2px 8px; border: 1px solid #34322d; }
@@ -299,6 +404,12 @@ svg text { fill: #9a968d; font-size: 11px; }
 .ubadge.err { color: #e0816f; border-color: #5a3a33; background: #2a1f1c; }
 .uwins { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .uwins.single { grid-template-columns: 1fr; }
+/* Sessão e semanal no mesmo container, com um divisor recuado no meio. O container
+   passa a ser o `.uwins`; os blocos perdem a moldura própria. Com uma janela só
+   (`.single`), o bloco mantém a moldura dele. */
+.uwins.juntas { gap: 0; background: #2a2926; border: 1px solid #34322d; border-radius: 10px; }
+.uwins.juntas > .uwin { position: relative; background: none; border: 0; border-radius: 0; }
+.uwins.juntas > .uwin + .uwin::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 1px; background: #34322d; }
 .uwin { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 14px; }
 .uwin-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .uwin-label { color: #e8e6e1; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
@@ -364,6 +475,9 @@ svg text { fill: #9a968d; font-size: 11px; }
 .modal-check { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: #9a968d;
   font-size: 13px; cursor: pointer; user-select: none; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+/* Modal do apelido de uma conta recém-conectada. */
+.apelido-input { margin-top: 16px; }
+#apelido-conta b { color: #e8e6e1; font-weight: 600; overflow-wrap: anywhere; }
 /* Mini gráfico de linha da % ao longo das últimas ~5h (tela "Uso atual"). Fica
    logo abaixo da barra de progresso, numa moldura própria (fundo escuro + borda)
    para delimitar bem onde a área de plotagem começa e termina. */
@@ -457,6 +571,21 @@ select {
 .auth-status, .codex-auth-status { font-size: 13px; color: #b8b3aa; margin-bottom: 14px; }
 .auth-status.ok, .codex-auth-status.ok { color: #7fc99a; }
 .auth-status.warn, .codex-auth-status.warn { color: #e0a890; }
+/* Lista de contas conectadas de um provedor (abas Codex/Claude): uma linha por
+   conta com e-mail + status, o apelido editável e as ações. */
+.contas { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.contas:empty { display: none; }
+.conta { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #3a3833;
+  border-radius: 10px; background: #1c1b18; }
+.conta-info { flex: 1; min-width: 0; }
+.conta-nome { font-size: 14px; color: #e8e6e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conta-selo { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: #3a2a22; color: #e0a890; font-size: 11.5px; }
+.conta-status { font-size: 12.5px; color: #b8b3aa; margin-top: 2px; }
+.conta-status.ok { color: #7fc99a; }
+.conta-status.warn { color: #e0a890; }
+.conta input.conta-apelido { flex: none; width: 130px; padding: 6px 9px; font-size: 13px; }
+.conta-acoes { flex: none; display: flex; gap: 6px; }
+.btn-sm { padding: 6px 10px; font-size: 12.5px; white-space: nowrap; }
 /* Os blocos de modo (arquivo/navegador) do Codex agrupam um .field; zera a margem
    inferior dele para não somar com o gap do provider-body. */
 #set-codexFileAuth > .field,
@@ -559,8 +688,10 @@ svg.pv-ico { display: block; }
 .pv-whead b { font-size: 7px; font-weight: 600; color: #eceae5; }
 /* minimo: uma linha por provedor (logo + nome + %). */
 .pv-wmin { display: flex; align-items: center; gap: 3px; }
-.pv-wmin b { font-size: 7px; font-weight: 600; color: #eceae5; margin-right: auto; }
 .pv-wmin em { font-size: 7px; font-style: normal; color: #cfcbc2; }
+/* Como no widget, só o ícone, sem o nome do provedor: a 1ª % leva as outras para a
+   direita. */
+.pv-wmin em:first-of-type { margin-left: auto; }
 /* anel duplo: aneis concentricos + icone central + legenda. */
 .pv-wg-anel { flex-direction: row; align-items: center; justify-content: center; gap: 6px; width: auto; }
 .pv-rings { position: relative; flex: none; }
@@ -575,7 +706,25 @@ svg.pv-ico { display: block; }
 /* Seção com mais respiro entre os itens (ex.: Aparência do widget). */
 .set-roomy { display: flex; flex-direction: column; gap: 22px; margin-bottom: 16px; }
 .set-roomy > .field { margin-bottom: 0; }
-.prov-toggles-row > .prov-toggle { flex: 1 1 0; }
+.prov-toggles-row > .prov-toggle, .prov-toggles-row > .prov-card { flex: 1 1 0; }
+/* Cartão do provedor com as contas dele embaixo (aba Widget): a moldura sai do
+   <label> do provedor e vai para o cartão, que também leva a lista de contas. */
+.prov-card { display: flex; flex-direction: column; border: 1px solid #3a3833; border-radius: 11px; background: #201f1c; }
+.prov-card > .prov-toggle { border: 0; background: none; }
+.prov-contas { display: flex; flex-direction: column; margin: 0 13px 6px; padding-top: 4px; border-top: 1px solid #34322d; }
+.prov-conta { display: flex; align-items: center; gap: 10px; padding: 7px 0; cursor: pointer; user-select: none; }
+.prov-conta-textos { margin-right: auto; min-width: 0; display: flex; flex-direction: column; }
+.prov-conta-nome, .prov-conta-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-conta-nome { font-size: 13.5px; font-weight: 600; color: #e8e6e1; }
+.prov-conta-email { font-size: 12px; color: #9a968d; }
+/* Radio da conta na aba Barra (uma conta por provedor na barra de tarefas). */
+.prov-conta-radio { flex: none; width: 16px; height: 16px; margin: 0; accent-color: #d97757; cursor: pointer; }
+/* Provedor desligado: as contas ficam apagadas e sem clique (o switch de cima manda). */
+.prov-card.off .prov-contas { opacity: .45; pointer-events: none; }
+/* Switch menor, para itens abaixo de outro switch (as contas dentro do provedor). */
+.switch-sm .switch-track { width: 36px; height: 20px; border-radius: 10px; }
+.switch-sm .switch-track::after { top: 3px; left: 3px; width: 14px; height: 14px; }
+.switch-sm input:checked + .switch-track::after { transform: translateX(16px); }
 .check { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
 .check input { width: 18px; height: 18px; accent-color: #d97757; flex: none; cursor: pointer; margin: 0; }
 .check span { font-size: 14px; color: #e8e6e1; }
@@ -588,6 +737,10 @@ svg.pv-ico { display: block; }
 .btn.save { background: #d97757; border-color: #d97757; color: #1a1915; font-weight: 600; }
 .btn.save:hover { background: #e08a6d; }
 .btn.save:disabled { opacity: .55; cursor: default; }
+/* Segundo clique de uma ação destrutiva (ex.: "Confirmar remoção" da conta). O
+   vermelho se distingue do laranja das ações principais. */
+.btn.danger { background: #d14b3f; border-color: #d14b3f; color: #fff; font-weight: 600; }
+.btn.danger:hover { background: #dc5c50; border-color: #dc5c50; }
 .winonly { color: #6f6c64; font-size: 11px; border: 1px solid #34322d; border-radius: 6px; padding: 1px 6px; margin-left: 8px; }
 /* Alinha pela linha de base: o aviso é bem menor que o título e, centralizado,
    ficava flutuando acima da linha dele. O recuo à direita casa com o padding
@@ -622,6 +775,8 @@ svg.pv-ico { display: block; }
   .brand { padding: 0 12px 0 4px; }
   .nav { flex-direction: row; }
   .uwins { grid-template-columns: 1fr; }
+  /* Janelas juntas: empilhadas, o divisor vira horizontal. */
+  .uwins.juntas > .uwin + .uwin::before { top: 0; bottom: auto; left: 14px; right: 14px; width: auto; height: 1px; }
 }
 .uprov-name svg.pico { flex: none; }
 
@@ -669,6 +824,35 @@ svg.pv-ico { display: block; }
 .wwin-pct { font-size: 17px; font-weight: 700; line-height: 1; }
 .wbar { height: 6px; background: rgba(0, 0, 0, .4); border-radius: 999px; margin: 5px 0; overflow: hidden; }
 .wbar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+
+/* ---- Várias contas no mesmo provedor (modos "completo" e "anel duplo") ---- */
+/* Botão ⇄ que alterna a conta. Sobreposto (não empurra o conteúdo) e só aparece
+   com o mouse sobre o card: `.sob-mouse` é posto por widget.ts, porque o card não
+   recebe o mouse (é área de arraste) e o `:hover` não o alcança. O botão é o único
+   ponto do card que recebe. No completo fica no canto de cima, na linha do nome;
+   no anel duplo, centralizado na altura. */
+.wprov { position: relative; }
+.wtroca { position: absolute; top: 6px; right: 7px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: none; border-radius: 50%; background: rgba(255, 255, 255, .12); color: #f2f0ea; cursor: pointer; pointer-events: auto;
+  opacity: 0; transform: translateX(4px); transition: opacity .15s ease, transform .15s ease, background .15s ease; }
+.wprov.sob-mouse .wtroca { opacity: 1; transform: none; }
+.wtroca:hover { background: rgba(255, 255, 255, .22); }
+.wprov-duplo .wtroca { top: 50%; transform: translate(4px, -50%); }
+.wprov-duplo.sob-mouse .wtroca { transform: translate(0, -50%); }
+/* Linha logo abaixo do card (fora dele), alinhada à esquerda: pontinhos (quantas
+   contas o provedor tem no widget e qual está na tela; a 1ª é a principal) e o
+   rótulo da conta atual, com reticências se não couber. A margem negativa a
+   aproxima do card, desfazendo parte do gap do .wdg-cards. */
+.wconta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: -4px; padding: 0 4px; pointer-events: none; }
+.wconta-apelido { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #b3afa6; }
+.wconta-pontos { display: flex; flex: none; gap: 4px; }
+.wconta-pontos i { width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .22); }
+.wconta-pontos i.on { background: #e8e6e1; }
+/* Conta com erro ou coletando no modo completo: o aviso fica sobre blocos
+   invisíveis das janelas, para o card ter a mesma altura do normal. */
+.wprov-nota-box { position: relative; }
+.wfantasma { visibility: hidden; }
+.wprov-nota-box > .wprov-note { position: absolute; inset: 0; display: flex; align-items: center; }
 .wwin-reset { font-size: 10.5px; color: #b3afa6; }
 /* Contagem regressiva (tempo restante) em branco nos três modos, para
    destacá-la do texto de reset ao redor. */
@@ -696,6 +880,11 @@ svg.pv-ico { display: block; }
 .wmin-item { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .wmin-pct { font-size: 13.5px; font-weight: 700; }
 .wmin-reset { font-size: 10.5px; color: #fff; }
+/* Títulos "Principal"/"Secundário" do modo mínimo com mais de uma conta. Colados
+   nas linhas que agrupam (a margem negativa desfaz parte do gap do .wdg-cards);
+   o segundo título ganha respiro para separar os grupos. */
+.wgrupo { font-size: 10px; font-weight: 600; letter-spacing: .3px; color: #b3afa6; margin: 0 2px -3px; pointer-events: none; }
+.wgrupo:not(:first-child) { margin-top: 4px; }
 
 /* ---- Modo "anelduplo": anéis concêntricos ---- */
 /* Mesmo princípio do "minimo": o conteúdo mantém o tamanho natural (filhos não
@@ -747,6 +936,8 @@ svg.pv-ico { display: block; }
 .envio-prov-status { color: #807c74; font-size: 12.5px; margin-top: 10px; }
 .envio-prov-state.on { color: #fff; font-weight: 600; }
 .envio-prov-state.off { color: #9a968d; }
+/* Qual conta está sendo enviada, quando o provedor tem mais de uma. */
+.envio-prov-conta { color: #c9c5bc; }
 /* Indicador "ao vivo": ponto verde pulsante quando o envio está ativo. */
 .envio-badge.active .envio-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #7fc99a; margin-right: 8px; vertical-align: middle; animation: envioPulse 1.4s ease-in-out infinite; }
 @keyframes envioPulse {

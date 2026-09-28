@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, File, OpenOptions},
     io::{BufRead, Write},
@@ -6,7 +7,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, MutexGuard, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -15,6 +16,7 @@ use std::{
 mod claude_auth;
 mod codex_auth;
 mod codex_dashboard;
+mod contas;
 mod http_server;
 mod usage_dashboard;
 
@@ -33,6 +35,8 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+
+use contas::Provedor;
 
 const TRAY_ID: &str = "main-tray";
 const APP_NAME_WINDOWS: &str = "AiUsageTrayAgent";
@@ -450,6 +454,10 @@ struct RuntimePaths {
     config_dir: PathBuf,
     config_file: PathBuf,
     logs_dir: PathBuf,
+    /// Onde procurar o `.claude.json` do CLI do Claude, na ordem (ver
+    /// `arquivos_config_do_cli`). Campo, e nao constante, para os testes nao lerem
+    /// o arquivo real da maquina.
+    config_do_cli: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -457,8 +465,14 @@ struct RuntimeSnapshot {
     paused: bool,
     last_error: Option<String>,
     last_successful_send_at: Option<String>,
-    codex_metric: Option<UsageMetric>,
-    claude_metric: Option<UsageMetric>,
+    /// Ultima metrica de cada conta, pela chave `"<provedor>:<id>"`. Um provedor
+    /// habilitado sem conta conectada aparece com a chave do provedor (`"claude"`),
+    /// carregando o erro "nao conectado" — o mesmo card de antes.
+    metrics: BTreeMap<String, UsageMetric>,
+    /// Chave da conta principal de cada provedor (pela chave do provedor), definida
+    /// no ultimo ciclo. As telas que ainda mostram uma conta por provedor (tray,
+    /// barra, widget) e o envio ao Loki usam a principal.
+    principais: BTreeMap<String, String>,
     /// Historico curto dos ultimos envios (anel), exibido na tela "Envio de dados"
     /// em tempo (quase) real. Mais novos no fim; limitado a `SEND_LOG_MAX`.
     send_log: Vec<SendLogEntry>,
@@ -466,6 +480,29 @@ struct RuntimeSnapshot {
     /// de linha da tela "Uso atual". Mais novas no fim; podadas para as ultimas
     /// `USAGE_HISTORY_WINDOW_SECS`. So' vive enquanto o app roda (sem disco).
     usage_history: Vec<UsageSample>,
+}
+
+impl RuntimeSnapshot {
+    /// Metrica da conta que a barra de tarefas mostra no provedor (ver
+    /// `chave_da_barra`).
+    fn metrica_da_barra(&self, prefs: &contas::Prefs, provedor: Provedor) -> Option<&UsageMetric> {
+        let principal = self.principais.get(provedor.chave()).map(String::as_str);
+        chave_da_barra(prefs.conta_na_barra(provedor), &self.metrics, principal)
+            .and_then(|chave| self.metrics.get(chave))
+    }
+}
+
+/// Conta que a barra de tarefas mostra no provedor: uma por provedor, a escolhida
+/// na aba Barra se ela ainda existe (tem metrica no snapshot, onde toda conta
+/// conectada entra a cada coleta), senao a principal.
+fn chave_da_barra<'a>(
+    escolhida: Option<&'a str>,
+    metrics: &BTreeMap<String, UsageMetric>,
+    principal: Option<&'a str>,
+) -> Option<&'a str> {
+    escolhida
+        .filter(|chave| metrics.contains_key(*chave))
+        .or(principal)
 }
 
 /// Uma entrada do historico de envios: quando, qual ferramenta e o resultado.
@@ -490,17 +527,14 @@ struct SendLogEntry {
 const SEND_LOG_MAX: usize = 50;
 
 /// Uma amostra do uso num instante, para os mini-graficos de linha da tela "Uso
-/// atual". Cada campo e' a % daquela janela (sessao 5h / semanal 7d) de cada
-/// provedor, ou `None` quando o provedor estava desabilitado/com erro naquele
-/// momento (a UI trata `None` como "sem ponto").
+/// atual": a % de cada janela (sessao 5h, semanal 7d) de cada conta, pela chave da
+/// conta. `None` numa janela (ou a conta ausente) = sem dado naquele momento
+/// (desabilitada/com erro); a UI trata como "sem ponto".
 #[derive(Debug, Clone, Serialize)]
 struct UsageSample {
     /// ISO-8601 (RFC 3339) em UTC do momento da coleta.
     t: String,
-    claude_5h: Option<f64>,
-    claude_7d: Option<f64>,
-    codex_5h: Option<f64>,
-    codex_7d: Option<f64>,
+    valores: BTreeMap<String, (Option<f64>, Option<f64>)>,
 }
 
 /// Janela do historico dos mini-graficos: ultimas 5 horas (a mesma janela da
@@ -568,6 +602,15 @@ struct SessaoAutoStatus {
     /// Ha' uma chamada ao CLI em andamento. A UI usa para mostrar "Testando…" e
     /// saber quando parar de consultar o resultado.
     em_execucao: bool,
+    /// Conta cuja janela de 5h decide o disparo (apelido, senao e-mail). Os tres
+    /// campos abaixo nao sao guardados: `status_da_sessao_auto` os calcula a cada
+    /// leitura, porque a conta do CLI muda por fora (`/login`).
+    conta_vigiada: Option<String>,
+    /// A conta vigiada e' a do login do CLI (`false`: o login do CLI nao pode ser
+    /// lido e ela e' a unica conta do app).
+    conta_do_cli: bool,
+    /// Por que a reabertura esta' parada, quando nao ha' conta para vigiar.
+    aviso: Option<String>,
 }
 
 /// Trava o estado da reabertura automatica, recuperando de envenenamento — mesma
@@ -719,7 +762,7 @@ pub fn run() {
             set_envio_provider,
             clear_send_log,
             set_usage_chart,
-            set_providers_order,
+            set_contas_ordem,
             check_updates_now,
             get_pending_update,
             install_update,
@@ -729,14 +772,19 @@ pub fn run() {
             open_external,
             codex_login,
             codex_auth_status,
-            codex_logout,
             codex_login_cancel,
             claude_login,
             claude_auth_status,
-            claude_logout,
+            get_sessao_auto_status,
             claude_login_cancel,
             claude_login_orgs,
-            claude_select_org
+            claude_select_org,
+            remover_conta,
+            set_conta_apelido,
+            set_conta_widget,
+            set_conta_barra,
+            set_conta_enviada,
+            set_conta_principal
         ])
         .setup(|app| {
             // Janela unica do app (Dashboard + Configuracoes) e' criada sob demanda
@@ -862,11 +910,11 @@ fn settings_value<R: Runtime>(app: &AppHandle<R>, paths: &RuntimePaths) -> Value
     let config = read_config(paths);
     let autostart = app.autolaunch().is_enabled().unwrap_or(false);
     // Resultado da ultima reabertura automatica de sessao, para a aba Claude
-    // mostrar se funcionou (e o porque quando nao). Vive so' em memoria, entao
-    // pode nao existir ainda (app recem-aberto).
+    // mostrar se funcionou (e o porque quando nao), e a conta vigiada. O resultado
+    // vive so' em memoria, entao pode nao existir ainda (app recem-aberto).
     let sessao_auto_status = app
         .try_state::<Arc<SharedState>>()
-        .map(|shared| lock_sessao_auto(&shared).status.clone())
+        .map(|shared| status_da_sessao_auto(paths, &shared))
         .unwrap_or_default();
 
     let mut value = json!({
@@ -935,60 +983,127 @@ fn save_settings(
     Ok(settings_value(&app, paths.inner()))
 }
 
-/// Estado de uso exposto a' tela "Uso atual": as metricas atuais de cada
-/// provider (a mesma fonte do tray e da barra de tarefas), mais se cada um esta'
-/// habilitado e se a coleta esta' pausada. Nao faz rede: le' apenas o snapshot
-/// ja' coletado pelo worker.
+fn provedor_habilitado(config: &AppConfig, provedor: Provedor) -> bool {
+    match provedor {
+        Provedor::Claude => config.providers.claude.habilitado,
+        Provedor::Codex => config.providers.codex.habilitado,
+    }
+}
+
+/// Um card da tela "Uso atual": uma conta conectada ou, para um provedor sem conta,
+/// o card dele (habilitado: "nao conectado"; desabilitado: um card so',
+/// "desabilitado"), com a chave do provedor.
+struct EntradaUso {
+    chave: String,
+    provedor: Provedor,
+    /// Apelido, senao o e-mail. `None` no card do provedor sem conta.
+    rotulo: Option<String>,
+    principal: bool,
+    habilitado: bool,
+}
+
+/// Cards da tela "Uso atual", na ordem salva em `contas.json` (ver
+/// `contas::ordenar`). A ordem natural, de onde saem as posicoes das contas novas,
+/// e' a dos provedores no `config.json` com a principal primeiro.
+fn entradas_de_uso(
+    config: &AppConfig,
+    config_dir: &Path,
+    prefs: &contas::Prefs,
+) -> Vec<EntradaUso> {
+    let mut entradas = Vec::new();
+    for provedor in config
+        .providers
+        .ordem
+        .iter()
+        .filter_map(|k| Provedor::da_chave(k))
+    {
+        let habilitado = provedor_habilitado(config, provedor);
+        let contas = if habilitado {
+            contas::listar(config_dir, provedor)
+        } else {
+            Vec::new()
+        };
+        if contas.is_empty() {
+            entradas.push(EntradaUso {
+                chave: provedor.chave().to_string(),
+                provedor,
+                rotulo: None,
+                principal: true,
+                habilitado,
+            });
+        }
+        for conta in contas {
+            let rotulo = prefs
+                .apelido(&conta.chave)
+                .map(str::to_string)
+                .or(conta.email);
+            entradas.push(EntradaUso {
+                chave: conta.chave,
+                provedor,
+                rotulo,
+                principal: conta.principal,
+                habilitado,
+            });
+        }
+    }
+    let presentes: Vec<String> = entradas.iter().map(|e| e.chave.clone()).collect();
+    let ordem = contas::ordenar(&presentes, &prefs.ordem);
+    entradas.sort_by_key(|e| ordem.iter().position(|chave| *chave == e.chave));
+    entradas
+}
+
+/// Estado de uso exposto a' tela "Uso atual": um card por conta (ver
+/// `entradas_de_uso`) com a metrica atual (a mesma fonte do tray e da barra de
+/// tarefas) e o historico, mais se a coleta esta' pausada. Nao faz rede: le' o
+/// snapshot ja' coletado pelo worker e a lista de contas do disco.
 fn usage_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
-    // Le' o config fora do lock (faz I/O de disco); depois trava o snapshot so' o
-    // tempo de montar as series do historico (downsample, sem I/O) e clonar as duas
+    // Le' config e contas fora do lock (I/O de disco); depois trava o snapshot so'
+    // o tempo de montar as series do historico (downsample, sem I/O) e clonar as
     // metricas — sem clonar o anel inteiro de amostras.
     let config = read_config(paths);
     let chart_enabled = config.uso_atual.grafico;
-    let (paused, last_error, claude_metric, codex_metric, history) = {
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let entradas = entradas_de_uso(&config, &paths.config_dir, &prefs);
+    let (paused, last_error, cards) = {
         let snapshot = lock_snapshot(shared);
-        // Com o grafico desligado, devolve series vazias (o anel ja' e' limpo no
-        // worker; aqui garante que a UI nunca receba pontos residuais).
-        let history = if chart_enabled {
-            json!({
-                "claude": {
-                    "session": downsample_usage(&snapshot.usage_history, |s| s.claude_5h),
-                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.claude_7d),
-                },
-                "codex": {
-                    "session": downsample_usage(&snapshot.usage_history, |s| s.codex_5h),
-                    "weekly": downsample_usage(&snapshot.usage_history, |s| s.codex_7d),
-                },
+        let cards: Vec<Value> = entradas
+            .iter()
+            .map(|entrada| {
+                // Com o grafico desligado, devolve series vazias (o anel ja' e' limpo
+                // no worker; aqui garante que a UI nunca receba pontos residuais).
+                let serie = |semanal: bool| {
+                    if !chart_enabled {
+                        return Vec::new();
+                    }
+                    downsample_usage(&snapshot.usage_history, |amostra| {
+                        amostra.valores.get(&entrada.chave).and_then(|par| {
+                            if semanal {
+                                par.1
+                            } else {
+                                par.0
+                            }
+                        })
+                    })
+                };
+                json!({
+                    "chave": entrada.chave,
+                    "provedor": entrada.provedor.chave(),
+                    "rotulo": entrada.rotulo,
+                    "principal": entrada.principal,
+                    "habilitado": entrada.habilitado,
+                    "metric": snapshot.metrics.get(&entrada.chave),
+                    "history": { "session": serie(false), "weekly": serie(true) },
+                })
             })
-        } else {
-            json!({
-                "claude": { "session": [], "weekly": [] },
-                "codex": { "session": [], "weekly": [] },
-            })
-        };
-        (
-            snapshot.paused,
-            snapshot.last_error.clone(),
-            snapshot.claude_metric.clone(),
-            snapshot.codex_metric.clone(),
-            history,
-        )
+            .collect();
+        (snapshot.paused, snapshot.last_error.clone(), cards)
     };
     json!({
         "paused": paused,
         "lastError": last_error,
         "chartEnabled": chart_enabled,
         "chartWarnOnDisable": config.uso_atual.avisar_ao_desligar,
-        "ordem": config.providers.ordem,
-        "claude": {
-            "habilitado": config.providers.claude.habilitado,
-            "metric": claude_metric,
-        },
-        "codex": {
-            "habilitado": config.providers.codex.habilitado,
-            "metric": codex_metric,
-        },
-        "history": history,
+        "contas": cards,
     })
 }
 
@@ -1029,40 +1144,85 @@ async fn force_collect(app: AppHandle) -> Value {
 /// Historico diario de uso do Codex para a tela "Dashboard Codex". Faz uma
 /// chamada de rede (analytics do backend do ChatGPT) usando o mesmo token do
 /// `auth.json` da coleta; por isso roda em `spawn_blocking` (reqwest sincrono).
-/// `days` e' o tamanho da janela (ex.: 7 ou 30) terminando hoje; `start`/`end`
-/// (opcionais) definem um range personalizado. Em falha, devolve
-/// `{ "error": "..." }` para a tela exibir a mensagem.
+/// `conta` e' a chave da conta mostrada (ausente: a principal); `days` e' o
+/// tamanho da janela (ex.: 7 ou 30) terminando hoje; `start`/`end` (opcionais)
+/// definem um range personalizado. Em falha, devolve `{ "error": "..." }` para a
+/// tela exibir a mensagem.
 #[tauri::command]
 async fn get_codex_stats(
     app: AppHandle,
+    conta: Option<String>,
     days: u32,
     start: Option<String>,
     end: Option<String>,
 ) -> Value {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = app.state::<RuntimePaths>().inner().clone();
-        collect_codex_stats(&paths, days, start, end)
+        collect_codex_stats(&paths, conta.as_deref(), days, start, end)
     })
     .await
     .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
 
-/// Coleta o historico de uso do Codex (rede): resolve o `auth.json` do login pelo
-/// navegador e delega para `codex_dashboard::collect` com o cliente HTTP compartilhado.
-/// Compartilhado pelo comando nativo `get_codex_stats` e pelo handler HTTP, que
-/// antes duplicavam esta logica.
+/// Conta cujo historico o Dashboard Codex mostra: a pedida, senao a principal. A
+/// pedida pode ter sido removida desde que a tela montou o seletor.
+fn conta_do_dashboard<'a>(
+    contas: &'a [contas::Conta],
+    pedida: Option<&str>,
+) -> Option<&'a contas::Conta> {
+    pedida
+        .and_then(|chave| contas.iter().find(|conta| conta.chave == chave))
+        .or_else(|| contas.iter().find(|conta| conta.principal))
+}
+
+/// Coleta o historico de uso do Codex (rede): resolve o `auth.json` da conta
+/// escolhida e delega para `codex_dashboard::collect` com o cliente HTTP
+/// compartilhado. Compartilhado pelo comando nativo `get_codex_stats` e pelo
+/// handler HTTP, que antes duplicavam esta logica.
+///
+/// A resposta leva tambem as contas do seletor (na ordem dos cards do "Uso
+/// atual") e a chave da conta usada, inclusive em erro: e' por ela que a tela
+/// monta o seletor, no app e no navegador, onde os comandos de conta nao estao
+/// liberados.
 pub(crate) fn collect_codex_stats(
     paths: &RuntimePaths,
+    conta: Option<&str>,
     days: u32,
     start: Option<String>,
     end: Option<String>,
 ) -> Value {
     let client = http_client();
-    let auth_path = match resolve_codex_auth_file(&client, paths) {
-        Ok(path) => path,
-        Err(error) => return json!({ "error": error }),
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let mut lista = contas::listar(&paths.config_dir, Provedor::Codex);
+    let chaves: Vec<String> = lista.iter().map(|c| c.chave.clone()).collect();
+    let ordem = contas::ordenar(&chaves, &prefs.ordem);
+    lista.sort_by_key(|c| ordem.iter().position(|chave| *chave == c.chave));
+
+    let escolhida = conta_do_dashboard(&lista, conta);
+    let arquivo = escolhida
+        .map(|c| c.arquivo.clone())
+        .unwrap_or_else(|| codex_auth::auth_file(&paths.config_dir));
+    let mut resultado = match resolve_codex_auth_file(&client, &arquivo) {
+        Ok(auth_path) => {
+            codex_dashboard::collect(&client, &auth_path.to_string_lossy(), days, start, end)
+        }
+        Err(error) => json!({ "error": error }),
     };
-    codex_dashboard::collect(&client, &auth_path.to_string_lossy(), days, start, end)
+    if let Some(objeto) = resultado.as_object_mut() {
+        objeto.insert("conta".into(), json!(escolhida.map(|c| &c.chave)));
+        let opcoes: Vec<Value> = lista
+            .iter()
+            .map(|c| {
+                json!({
+                    "chave": c.chave,
+                    "apelido": prefs.apelido(&c.chave),
+                    "email": c.email,
+                })
+            })
+            .collect();
+        objeto.insert("contas".into(), Value::Array(opcoes));
+    }
+    resultado
 }
 
 /// Estado exposto a' tela "Envio de dados": pausa geral, envio por provider
@@ -1080,6 +1240,7 @@ fn envio_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
         )
     };
     let config = read_config(paths);
+    let prefs = contas::ler_prefs(&paths.config_dir);
     json!({
         "paused": paused,
         "intervaloSegundos": config.intervalo_segundos,
@@ -1088,13 +1249,39 @@ fn envio_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
         "claude": {
             "habilitado": config.providers.claude.habilitado,
             "enviar": config.envio.claude,
+            "conta": rotulo_da_enviada(&paths.config_dir, &prefs, Provedor::Claude),
         },
         "codex": {
             "habilitado": config.providers.codex.habilitado,
             "enviar": config.envio.codex,
+            "conta": rotulo_da_enviada(&paths.config_dir, &prefs, Provedor::Codex),
         },
         "log": log,
     })
+}
+
+/// Rotulo (apelido, senao e-mail) da conta enviada ao Loki no provedor, para a tela
+/// "Envio de dados" dizer qual e'. So' com mais de uma conta: com uma, nao ha' o que
+/// distinguir. A enviada e' a escolhida na aba Envio, se ainda existe, senao a
+/// principal (a regra de `envia_ao_loki`).
+fn rotulo_da_enviada(
+    config_dir: &Path,
+    prefs: &contas::Prefs,
+    provedor: Provedor,
+) -> Option<String> {
+    let lista = contas::listar(config_dir, provedor);
+    if lista.len() < 2 {
+        return None;
+    }
+    let escolhida = prefs.conta_enviada(provedor);
+    let conta = lista
+        .iter()
+        .find(|c| Some(c.chave.as_str()) == escolhida)
+        .or_else(|| lista.iter().find(|c| c.principal))?;
+    prefs
+        .apelido(&conta.chave)
+        .map(str::to_string)
+        .or_else(|| conta.email.clone())
 }
 
 /// Le' o estado da tela "Envio de dados". Barato e sem rede; chamado ao abrir a
@@ -1175,22 +1362,33 @@ fn set_usage_chart(
     Ok(usage_value(paths.inner(), shared.inner()))
 }
 
-/// Define a ordem de exibição dos provedores — uma única config aplicada à tela
-/// "Uso atual", ao widget e à barra de tarefas. Persiste em `config.providers.ordem`
-/// (normalizada para uma permutação exata dos provedores conhecidos) e reaplica o
-/// tray/barra na hora. Devolve o estado de uso já atualizado (com a nova `ordem`).
+/// Define a ordem dos cards da tela "Uso atual" (chaves de conta), gravada em
+/// `contas.json`. O widget e a barra de tarefas mostram um card por provedor e
+/// seguem `config.providers.ordem`, que passa a acompanhar a posicao do primeiro
+/// card de cada provedor — e' tambem a ordem que a versao anterior usa. Reaplica o
+/// tray/barra na hora e devolve o estado de uso ja' atualizado.
 #[tauri::command]
-fn set_providers_order(
+fn set_contas_ordem(
     app: AppHandle,
     paths: State<'_, RuntimePaths>,
     shared: State<'_, Arc<SharedState>>,
     order: Vec<String>,
 ) -> Result<Value, String> {
+    contas::definir_ordem(&paths.config_dir, &order)?;
+    let mut ordem_provedores: Vec<String> = Vec::new();
+    for provedor in order.iter().filter_map(|chave| Provedor::da_chave(chave)) {
+        let chave = provedor.chave().to_string();
+        if !ordem_provedores.contains(&chave) {
+            ordem_provedores.push(chave);
+        }
+    }
+    normalize_provider_order(&mut ordem_provedores);
     let mut config = read_config(paths.inner());
-    config.providers.ordem = order;
-    normalize_config(&mut config);
-    write_config(paths.inner(), &config)
-        .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    if config.providers.ordem != ordem_provedores {
+        config.providers.ordem = ordem_provedores;
+        write_config(paths.inner(), &config)
+            .map_err(|error| format!("falha ao salvar config.json: {error}"))?;
+    }
     let _ = refresh_tray(&app, shared.inner());
     Ok(usage_value(paths.inner(), shared.inner()))
 }
@@ -1229,30 +1427,43 @@ fn apply_paused<R: Runtime>(
 
 /// Estado para o widget da area de trabalho: preferencias do widget mais as
 /// metricas atuais (o mesmo snapshot da tela "Uso atual"). Barato e sem rede.
+///
+/// `contas` traz uma entrada por conta (e o card do provedor sem conta), na ordem
+/// da tela "Uso atual", que tambem e' a ordem dos provedores no widget. `mostra`:
+/// o provedor ligado no widget E a conta ligada (aba Widget).
 fn widget_state_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
     let snapshot = lock_snapshot(shared).clone();
     let config = read_config(paths);
     let widget = &config.widget;
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let contas: Vec<Value> = entradas_de_uso(&config, &paths.config_dir, &prefs)
+        .into_iter()
+        .map(|entrada| {
+            let provedor_ligado = match entrada.provedor {
+                Provedor::Claude => widget.mostra_claude,
+                Provedor::Codex => widget.mostra_codex,
+            };
+            json!({
+                "chave": entrada.chave,
+                "provedor": entrada.provedor.chave(),
+                "rotulo": entrada.rotulo,
+                "principal": entrada.principal,
+                "habilitado": entrada.habilitado,
+                "mostra": provedor_ligado && prefs.mostra_no_widget(&entrada.chave),
+                "metric": snapshot.metrics.get(&entrada.chave),
+            })
+        })
+        .collect();
     json!({
+        "contas": contas,
         "habilitado": widget.habilitado,
-        "mostraClaude": widget.mostra_claude,
-        "mostraCodex": widget.mostra_codex,
         "fundo": widget.fundo,
         "opacidade": widget.opacidade,
         "janelas": widget.janelas,
         "formatoReset": widget.formato_reset,
         "modo": widget.modo,
         "sempreNaFrente": widget.sempre_na_frente,
-        "ordem": config.providers.ordem,
         "paused": snapshot.paused,
-        "claude": {
-            "habilitado": config.providers.claude.habilitado,
-            "metric": snapshot.claude_metric,
-        },
-        "codex": {
-            "habilitado": config.providers.codex.habilitado,
-            "metric": snapshot.codex_metric,
-        },
     })
 }
 
@@ -1790,20 +2001,74 @@ fn http_client() -> Client {
         .clone()
 }
 
-/// Resultado da coleta de um provedor: `None` quando o provedor esta'
-/// desabilitado; senao `Ok(metrica)` ou `Err(mensagem)`.
-type CollectOutcome = Option<Result<UsageMetric, String>>;
+/// Uma conta a coletar no ciclo. Um provedor habilitado sem conta conectada entra
+/// com a chave do provedor e o arquivo legado (ausente): a coleta devolve o erro
+/// "nao conectado", que e' o card de sempre.
+struct Alvo {
+    provedor: Provedor,
+    chave: String,
+    arquivo: PathBuf,
+    principal: bool,
+}
 
-/// Coleta as metricas dos providers habilitados (sempre, para alimentar o tray, a
-/// barra e o widget) e envia ao Loki conforme as regras de envio.
+fn alvos_da_coleta(config: &AppConfig, config_dir: &Path) -> Vec<Alvo> {
+    let mut alvos = Vec::new();
+    for provedor in Provedor::TODOS {
+        if !provedor_habilitado(config, provedor) {
+            continue;
+        }
+        let contas = contas::listar(config_dir, provedor);
+        if contas.is_empty() {
+            alvos.push(Alvo {
+                provedor,
+                chave: provedor.chave().to_string(),
+                arquivo: provedor.arquivo_principal(config_dir),
+                principal: true,
+            });
+        }
+        alvos.extend(contas.into_iter().map(|conta| Alvo {
+            provedor,
+            chave: conta.chave,
+            arquivo: conta.arquivo,
+            principal: conta.principal,
+        }));
+    }
+    alvos
+}
+
+/// Se a metrica da conta vai ao Loki: envio nao pausado, envio do provedor ligado
+/// em `config.envio` e a conta e' a enviada do provedor: a escolhida na aba Envio
+/// (`escolhida`, ja' conferida contra as contas do ciclo) ou, sem escolha, a
+/// principal. Vai uma conta por provedor, entao o Loki continua recebendo um stream
+/// por provedor, como na versao anterior.
+fn envia_ao_loki(config: &AppConfig, alvo: &Alvo, pausado: bool, escolhida: Option<&str>) -> bool {
+    let provedor_ligado = match alvo.provedor {
+        Provedor::Claude => config.envio.claude,
+        Provedor::Codex => config.envio.codex,
+    };
+    let e_a_enviada = escolhida.map_or(alvo.principal, |chave| chave == alvo.chave);
+    !pausado && provedor_ligado && e_a_enviada
+}
+
+/// Conta enviada ao Loki escolhida no provedor, se ela ainda esta' entre as contas
+/// do ciclo (removida, volta a' principal).
+fn enviada_escolhida<'a>(
+    prefs: &'a contas::Prefs,
+    alvos: &[Alvo],
+    provedor: Provedor,
+) -> Option<&'a str> {
+    prefs
+        .conta_enviada(provedor)
+        .filter(|chave| alvos.iter().any(|alvo| alvo.chave == *chave))
+}
+
+/// Coleta as metricas de todas as contas dos providers habilitados (sempre, para
+/// alimentar a tela "Uso atual", o tray, a barra e o widget) e envia ao Loki
+/// conforme as regras de envio (ver `envia_ao_loki`).
 ///
-/// O envio de cada provider acontece quando:
-/// - o envio nao esta' pausado, **e**
-/// - o envio daquele provider esta' habilitado em `config.envio`.
-///
-/// Ou seja, com o envio pausado/desabilitado a coleta continua normalmente; so' o
-/// trafego ao Loki e' suprimido. Cada tentativa de envio (sucesso ou falha) e'
-/// registrada no historico (`send_log`) exibido na tela "Envio de dados".
+/// Com o envio pausado/desabilitado a coleta continua normalmente; so' o trafego
+/// ao Loki e' suprimido. Cada tentativa de envio (sucesso ou falha) e' registrada
+/// no historico (`send_log`) exibido na tela "Envio de dados".
 fn run_collection_cycle<R: Runtime>(
     app: &AppHandle<R>,
     paths: &RuntimePaths,
@@ -1815,53 +2080,69 @@ fn run_collection_cycle<R: Runtime>(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let config = read_config(paths);
     let client = http_client();
-
-    // O ciclo respeita a pausa geral; o desligamento por provider (config.envio)
-    // tambem e' respeitado.
     let paused = lock_snapshot(shared).paused;
-    let send_allowed = !paused;
-    let send_codex = send_allowed && config.envio.codex;
-    let send_claude = send_allowed && config.envio.claude;
 
-    let codex_enabled = config.providers.codex.habilitado;
-    let claude_enabled = config.providers.claude.habilitado;
+    let alvos = alvos_da_coleta(&config, &paths.config_dir);
+    // O snapshot passa a refletir as contas atuais: some a metrica de conta
+    // removida ou de provedor desligado, e fica registrada a principal de cada um.
+    {
+        let mut snapshot = lock_snapshot(shared);
+        snapshot
+            .metrics
+            .retain(|chave, _| alvos.iter().any(|alvo| alvo.chave == *chave));
+        snapshot.principais = alvos
+            .iter()
+            .filter(|alvo| alvo.principal)
+            .map(|alvo| (alvo.provedor.chave().to_string(), alvo.chave.clone()))
+            .collect();
+    }
 
-    // Coleta os dois provedores em paralelo: cada GET tem timeout de 15s, entao
-    // serializa-los faria o ciclo (e a janela do `cycle_lock`) somar as latencias.
-    // As coletas sao puras (client + config), sem tocar no estado compartilhado;
+    // Coleta as contas em paralelo: cada GET tem timeout de 15s, entao serializa-las
+    // faria o ciclo (e a janela do `cycle_lock`) somar as latencias. As coletas sao
+    // puras (client + config + arquivo da conta), sem tocar no estado compartilhado;
     // o processamento (snapshot, envio, log) acontece depois, em sequencia.
-    let (codex_result, claude_result): (CollectOutcome, CollectOutcome) = thread::scope(|scope| {
-        let codex_handle =
-            codex_enabled.then(|| scope.spawn(|| collect_codex_metric(&client, &config, paths)));
-        let claude_result = claude_enabled.then(|| collect_claude_metric(&client, &config, paths));
-        let codex_result = codex_handle.map(|handle| {
-            handle
-                .join()
-                .unwrap_or_else(|_| Err("Panico durante a coleta do Codex.".to_string()))
-        });
-        (codex_result, claude_result)
+    let resultados: Vec<Result<UsageMetric, String>> = thread::scope(|scope| {
+        let (client, config) = (&client, &config);
+        let handles: Vec<_> = alvos
+            .iter()
+            .map(|alvo| {
+                scope.spawn(move || match alvo.provedor {
+                    Provedor::Claude => collect_claude_metric(client, config, &alvo.arquivo),
+                    Provedor::Codex => collect_codex_metric(client, config, &alvo.arquivo),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .zip(&alvos)
+            .map(|(handle, alvo)| {
+                handle.join().unwrap_or_else(|_| {
+                    Err(format!(
+                        "Panico durante a coleta do {}.",
+                        alvo.provedor.nome()
+                    ))
+                })
+            })
+            .collect()
     });
 
+    let prefs = contas::ler_prefs(&paths.config_dir);
     let mut had_error = false;
-    if let Some(result) = codex_result {
-        had_error |= handle_collected(
-            app, paths, shared, &client, &config, "codex", result, send_codex,
-        );
-    }
-    if let Some(result) = claude_result {
+    for (alvo, result) in alvos.iter().zip(resultados) {
+        let escolhida = enviada_escolhida(&prefs, &alvos, alvo.provedor);
         had_error |= handle_collected(
             app,
             paths,
             shared,
             &client,
             &config,
-            "claude",
+            alvo,
             result,
-            send_claude,
+            envia_ao_loki(&config, alvo, paused, escolhida),
         );
     }
 
-    if !codex_enabled && !claude_enabled {
+    if alvos.is_empty() {
         record_runtime_error(app, "Nenhum provider habilitado.");
     } else if !had_error {
         clear_last_error(shared);
@@ -1891,6 +2172,181 @@ const SESSAO_AUTO_COOLDOWN: Duration = Duration::from_secs(180);
 /// vira falha — nao pode ficar um `claude` pendurado a cada janela.
 const SESSAO_AUTO_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Login do CLI do Claude (o `oauthAccount` do `.claude.json`). E' a conta em que o
+/// `claude -p` da reabertura automatica abre a janela, seja qual for a principal
+/// do app.
+#[derive(Debug, Clone, PartialEq)]
+struct LoginDoCli {
+    organizacao: String,
+    email: Option<String>,
+    /// Nome da org, so' para o aviso.
+    nome_da_org: Option<String>,
+}
+
+/// Onde o CLI guarda o `.claude.json`: em `CLAUDE_CONFIG_DIR`, se definida (a doc
+/// do Claude Code diz que todo caminho de `~/.claude` passa para la'), senao no
+/// home. O `claude -p` herda o ambiente do app, entao le' o mesmo arquivo. O home
+/// fica tambem como segunda opcao, caso o arquivo nao esteja na pasta da variavel.
+fn arquivos_config_do_cli() -> Vec<PathBuf> {
+    let mut arquivos = Vec::new();
+    if let Some(dir) = env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
+        arquivos.push(PathBuf::from(dir).join(".claude.json"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        arquivos.push(home.join(".claude.json"));
+    }
+    arquivos
+}
+
+/// Le' o `oauthAccount` do conteudo do `.claude.json`. `None` sem login OAuth
+/// (ex.: CLI com chave de API) ou com o arquivo ilegivel.
+fn ler_login_do_cli(texto: &str) -> Option<LoginDoCli> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Arquivo {
+        oauth_account: Option<Conta>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Conta {
+        organization_uuid: Option<String>,
+        email_address: Option<String>,
+        organization_name: Option<String>,
+    }
+    let conta = serde_json::from_str::<Arquivo>(texto).ok()?.oauth_account?;
+    let organizacao = conta
+        .organization_uuid
+        .map(|org| org.trim().to_string())
+        .filter(|org| !org.is_empty())?;
+    Some(LoginDoCli {
+        organizacao,
+        email: conta.email_address,
+        nome_da_org: conta.organization_name,
+    })
+}
+
+/// Uma conta do Claude no app, com o que a escolha da conta vigiada compara.
+struct ContaClaude {
+    chave: String,
+    organizacao: Option<String>,
+    email: Option<String>,
+}
+
+/// Qual conta a reabertura automatica vigia (ver `escolher_conta_vigiada`).
+#[derive(Debug, PartialEq)]
+enum ContaVigiada {
+    /// `pelo_cli`: bate com o login do CLI. `false`: o login do CLI nao pode ser
+    /// lido e esta' e' a unica conta do app (o comportamento de antes).
+    Conta {
+        chave: String,
+        email: Option<String>,
+        pelo_cli: bool,
+    },
+    /// O CLI esta' logado numa conta que nao esta' conectada no app.
+    CliEmOutraConta,
+    /// Nao da' para saber qual das contas do app e' a do CLI.
+    CliDesconhecido,
+    SemConta,
+}
+
+/// Escolhe a conta cuja janela de 5h decide o disparo: a do CLI, porque e' nela que
+/// o `claude -p` abre a janela. Vigiar outra dispararia sem nunca abrir a janela
+/// vigiada (gastando cota a cada cooldown), ou nunca dispararia.
+///
+/// Bate por org + e-mail, a identidade das contas do app: pessoas diferentes numa
+/// mesma org de time tem janelas diferentes. Sem o e-mail de um dos lados, a org
+/// basta se sobrar uma conta so'.
+fn escolher_conta_vigiada(contas: &[ContaClaude], cli: Option<&LoginDoCli>) -> ContaVigiada {
+    let conta = |c: &ContaClaude, pelo_cli: bool| ContaVigiada::Conta {
+        chave: c.chave.clone(),
+        email: c.email.clone(),
+        pelo_cli,
+    };
+    if contas.is_empty() {
+        return ContaVigiada::SemConta;
+    }
+    let Some(cli) = cli else {
+        return match contas {
+            [unica] => conta(unica, false),
+            _ => ContaVigiada::CliDesconhecido,
+        };
+    };
+    let normaliza = |email: &str| email.trim().to_lowercase();
+    let candidatas: Vec<&ContaClaude> = contas
+        .iter()
+        .filter(|c| c.organizacao.as_deref() == Some(cli.organizacao.as_str()))
+        .filter(|c| match (&c.email, &cli.email) {
+            (Some(a), Some(b)) => normaliza(a) == normaliza(b),
+            _ => true,
+        })
+        .collect();
+    let exata = candidatas
+        .iter()
+        .find(|c| c.email.is_some() && cli.email.is_some());
+    match (exata, candidatas.as_slice()) {
+        (Some(c), _) | (None, [c]) => conta(c, true),
+        (None, []) => ContaVigiada::CliEmOutraConta,
+        (None, _) => ContaVigiada::CliDesconhecido,
+    }
+}
+
+/// A conta vigiada agora, a partir das contas do app e do login do CLI no disco.
+/// Devolve tambem o login do CLI, para o aviso dizer em que conta ele esta'.
+fn conta_vigiada(paths: &RuntimePaths) -> (ContaVigiada, Option<LoginDoCli>) {
+    let contas: Vec<ContaClaude> = contas::listar(&paths.config_dir, Provedor::Claude)
+        .into_iter()
+        .map(|conta| ContaClaude {
+            organizacao: claude_auth::organization_id(&conta.arquivo),
+            chave: conta.chave,
+            email: conta.email,
+        })
+        .collect();
+    let cli = paths
+        .config_do_cli
+        .iter()
+        .find_map(|arquivo| fs::read_to_string(arquivo).ok())
+        .and_then(|texto| ler_login_do_cli(&texto));
+    (escolher_conta_vigiada(&contas, cli.as_ref()), cli)
+}
+
+/// Status da reabertura automatica para a UI: o resultado da ultima tentativa (em
+/// memoria) mais a conta vigiada agora, ou o aviso de por que ela esta' parada.
+fn status_da_sessao_auto(paths: &RuntimePaths, shared: &SharedState) -> SessaoAutoStatus {
+    let mut status = lock_sessao_auto(shared).status.clone();
+    let (vigiada, cli) = conta_vigiada(paths);
+    match vigiada {
+        ContaVigiada::Conta {
+            chave,
+            email,
+            pelo_cli,
+        } => {
+            let prefs = contas::ler_prefs(&paths.config_dir);
+            status.conta_vigiada = prefs.apelido(&chave).map(str::to_string).or(email);
+            status.conta_do_cli = pelo_cli;
+        }
+        ContaVigiada::CliEmOutraConta => {
+            let (email, org) = cli.map_or((None, None), |cli| (cli.email, cli.nome_da_org));
+            let quem = match (email, org) {
+                (Some(email), Some(org)) => format!("{email} ({org})"),
+                (Some(email), None) => email,
+                (None, Some(org)) => format!("uma conta da org {org}"),
+                (None, None) => "outra conta".to_string(),
+            };
+            status.aviso = Some(format!(
+                "O CLI do Claude está logado em {quem}, que não está conectada no app. Conecte essa conta para a reabertura automática funcionar."
+            ));
+        }
+        ContaVigiada::CliDesconhecido => {
+            status.aviso = Some(
+                "Não foi possível saber em qual conta o CLI do Claude está logado. Com mais de uma conta no app, a reabertura automática fica parada."
+                    .to_string(),
+            );
+        }
+        ContaVigiada::SemConta => {}
+    }
+    status
+}
+
 /// Decide se e' hora de reabrir a janela de sessao do Claude e, se for, dispara a
 /// chamada **fora** do ciclo de coleta (o CLI leva segundos; segurar o
 /// `cycle_lock` congelaria tray/barra/widget nesse intervalo).
@@ -1912,11 +2368,17 @@ fn maybe_reopen_claude_session(
         return;
     }
 
+    // A janela que decide e' a da conta em que o CLI esta' logado, e nao a da
+    // principal: e' nela que o `claude -p` abre a sessao. Sem conta para vigiar,
+    // nao dispara; o motivo aparece no status (`status_da_sessao_auto`).
+    let ContaVigiada::Conta { chave, .. } = conta_vigiada(paths).0 else {
+        return;
+    };
     {
         let snapshot = lock_snapshot(shared);
         let sem_janela = snapshot
-            .claude_metric
-            .as_ref()
+            .metrics
+            .get(&chave)
             .is_some_and(|metric| metric.status == "ok" && metric.reset_em.is_none());
         if !sem_janela {
             return;
@@ -2387,16 +2849,18 @@ fn handle_collected<R: Runtime>(
     shared: &Arc<SharedState>,
     client: &Client,
     config: &AppConfig,
-    ferramenta: &str,
+    alvo: &Alvo,
     result: Result<UsageMetric, String>,
     send_allowed: bool,
 ) -> bool {
+    let ferramenta = alvo.provedor.chave();
     match result {
         Ok(metric) => {
             // A coleta sempre atualiza os dados/UI; o envio ao Loki ocorre conforme
-            // as regras de envio (pausa geral + config.envio).
-            update_metric(shared, metric.clone());
-            if !send_allowed {
+            // as regras de envio (ver `envia_ao_loki`).
+            update_metric(shared, &alvo.chave, metric.clone());
+            // Conta sem limites de uso (ex.: Claude gratuito): nao ha' o que enviar.
+            if !send_allowed || metric.status == STATUS_SEM_LIMITES {
                 return false;
             }
             match send_metric_to_loki(client, config, &metric) {
@@ -2435,12 +2899,12 @@ fn handle_collected<R: Runtime>(
         }
         Err(error) => {
             let metric = build_error_metric(&config.usuario, ferramenta, &error);
-            update_metric(shared, metric);
+            update_metric(shared, &alvo.chave, metric);
             let _ = append_log_line(
                 paths,
                 "error",
                 "Falha ao coletar metrica.",
-                Some(json!({ "ferramenta": ferramenta, "error": error })),
+                Some(json!({ "ferramenta": ferramenta, "conta": alvo.chave, "error": error })),
             );
             record_runtime_error(app, &error);
             true
@@ -2448,19 +2912,20 @@ fn handle_collected<R: Runtime>(
     }
 }
 
-/// Resolve o arquivo de credenciais do Codex: o arquivo gerenciado do login pelo
-/// navegador (`codex_auth`), renovando o token se preciso. Devolve o caminho pronto
-/// para os leitores (coleta e dashboard).
-fn resolve_codex_auth_file(client: &Client, paths: &RuntimePaths) -> Result<PathBuf, String> {
-    codex_auth::ensure_fresh(client, &paths.config_dir)
+/// Resolve o arquivo de credenciais de uma conta do Codex, renovando o token se
+/// preciso (`codex_auth`). Devolve o caminho pronto para os leitores (coleta e
+/// dashboard).
+fn resolve_codex_auth_file(client: &Client, arquivo: &Path) -> Result<PathBuf, String> {
+    codex_auth::ensure_fresh(client, arquivo)
 }
 
+/// Coleta o uso da conta do Codex cujas credenciais estao em `arquivo`.
 fn collect_codex_metric(
     client: &Client,
     config: &AppConfig,
-    paths: &RuntimePaths,
+    arquivo: &Path,
 ) -> Result<UsageMetric, String> {
-    let auth_path = resolve_codex_auth_file(client, paths)?;
+    let auth_path = resolve_codex_auth_file(client, arquivo)?;
 
     let auth_raw = fs::read_to_string(&auth_path)
         .map_err(|error| format!("Falha ao ler auth.json do Codex: {error}"))?;
@@ -2570,13 +3035,14 @@ fn collect_codex_metric(
     })
 }
 
+/// Coleta o uso da conta do Claude cujas credenciais estao em `arquivo`.
 fn collect_claude_metric(
     client: &Client,
     config: &AppConfig,
-    paths: &RuntimePaths,
+    arquivo: &Path,
 ) -> Result<UsageMetric, String> {
-    // Sessao capturada pelo login pelo navegador (arquivo gerenciado `claude_auth`).
-    let (cookie, organization_id) = claude_auth::credentials(&paths.config_dir)?;
+    // Sessao capturada pelo login pelo navegador (arquivo da conta, `claude_auth`).
+    let (cookie, organization_id) = claude_auth::credentials(arquivo)?;
 
     let response = client
         .get(format!(
@@ -2596,11 +3062,11 @@ fn collect_claude_metric(
     // marca para a UI oferecer "Reconectar"; sucesso limpa a marca.
     let code = response.status().as_u16();
     if code == 401 || code == 403 {
-        claude_auth::set_needs_reconnect(&paths.config_dir, true);
+        claude_auth::set_needs_reconnect(arquivo, true);
         // Mesma mensagem exibida na aba Claude das Configuracoes (reconexao).
         return Err("Sessão expirada. Reconecte sua conta para continuar a coleta.".to_string());
     } else if response.status().is_success() {
-        claude_auth::set_needs_reconnect(&paths.config_dir, false);
+        claude_auth::set_needs_reconnect(arquivo, false);
     }
 
     if !response.status().is_success() {
@@ -2613,14 +3079,16 @@ fn collect_claude_metric(
     let payload: ClaudeUsageResponse = response
         .json()
         .map_err(|error| format!("Falha ao decodificar resposta do Claude: {error}"))?;
+    metrica_do_claude(&config.usuario, payload)
+}
 
-    let five_hour = payload
-        .five_hour
-        .ok_or_else(|| "five_hour nao foi encontrado na resposta do Claude.".to_string())?;
-    let utilization = five_hour.utilization.ok_or_else(|| {
-        "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string()
-    })?;
+/// Status da metrica de uma conta sem nenhuma janela de limite (ex.: a conta
+/// gratuita do Claude, que a API devolve sem `five_hour` nem `seven_day`). Nao e'
+/// erro: nao vai ao log nem ao Loki, e as telas mostram um aviso neutro.
+const STATUS_SEM_LIMITES: &str = "sem_limites";
 
+/// Interpreta a resposta de uso do Claude.
+fn metrica_do_claude(usuario: &str, payload: ClaudeUsageResponse) -> Result<UsageMetric, String> {
     let seven_day_utilization = payload
         .seven_day
         .as_ref()
@@ -2630,8 +3098,31 @@ fn collect_claude_metric(
         .as_ref()
         .and_then(|value| value.resets_at.clone());
 
+    if payload.five_hour.is_none() && seven_day_utilization.is_none() {
+        return Ok(UsageMetric {
+            usuario: normalized_user(usuario),
+            ferramenta: "claude".to_string(),
+            uso_percentual: None,
+            restante_percentual: None,
+            status: STATUS_SEM_LIMITES.to_string(),
+            coletado_em: Utc::now().to_rfc3339(),
+            reset_em: None,
+            erro: None,
+            uso_percentual_7d: None,
+            restante_percentual_7d: None,
+            reset_em_7d: None,
+        });
+    }
+
+    let five_hour = payload
+        .five_hour
+        .ok_or_else(|| "five_hour nao foi encontrado na resposta do Claude.".to_string())?;
+    let utilization = five_hour.utilization.ok_or_else(|| {
+        "five_hour.utilization nao foi encontrado na resposta do Claude.".to_string()
+    })?;
+
     Ok(UsageMetric {
-        usuario: normalized_user(&config.usuario),
+        usuario: normalized_user(usuario),
         ferramenta: "claude".to_string(),
         uso_percentual: Some(round_percent(utilization)),
         restante_percentual: Some(remaining_percent(utilization)),
@@ -2747,15 +3238,20 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         let snapshot = {
             let mut guard = lock_snapshot(shared);
             if let Some(config) = &config {
-                if !config.providers.codex.habilitado {
-                    guard.codex_metric = None;
-                }
-                if !config.providers.claude.habilitado {
-                    guard.claude_metric = None;
-                }
+                guard.metrics.retain(|chave, _| {
+                    Provedor::da_chave(chave).is_some_and(|p| provedor_habilitado(config, p))
+                });
             }
             guard.clone()
         };
+
+        // Uma conta por provedor na barra de tarefas (no Linux, no titulo do tray): a
+        // escolhida na aba Barra, ou a principal sem escolha.
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let prefs = app
+            .try_state::<RuntimePaths>()
+            .map(|paths| contas::ler_prefs(&paths.config_dir))
+            .unwrap_or_default();
 
         #[cfg(target_os = "windows")]
         {
@@ -2773,7 +3269,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.codex.habilitado
                         && config.providers.codex.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.codex_metric.as_ref(),
+                        snapshot.metrica_da_barra(&prefs, Provedor::Codex),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -2784,7 +3280,7 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
                     config.providers.claude.habilitado
                         && config.providers.claude.mostra_na_taskbar_windows,
                     widget_detail(
-                        snapshot.claude_metric.as_ref(),
+                        snapshot.metrica_da_barra(&prefs, Provedor::Claude),
                         mostrar_hora,
                         mostra_sessao,
                         mostra_semanal,
@@ -2796,8 +3292,8 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
         #[cfg(target_os = "linux")]
         tray.set_title(Some(format!(
             "C:{} / Cl:{}",
-            metric_text(snapshot.codex_metric.as_ref()),
-            metric_text(snapshot.claude_metric.as_ref())
+            metric_text(snapshot.metrica_da_barra(&prefs, Provedor::Codex)),
+            metric_text(snapshot.metrica_da_barra(&prefs, Provedor::Claude))
         )))?;
 
         // Aplica a config do widget (criar/destruir/sempre-na-frente) em
@@ -2813,13 +3309,10 @@ fn refresh_tray<R: Runtime>(app: &AppHandle<R>, shared: &Arc<SharedState>) -> ta
     Ok(())
 }
 
-fn update_metric(shared: &Arc<SharedState>, metric: UsageMetric) {
-    let mut snapshot = lock_snapshot(shared);
-    match metric.ferramenta.as_str() {
-        "codex" => snapshot.codex_metric = Some(metric),
-        "claude" => snapshot.claude_metric = Some(metric),
-        _ => {}
-    }
+fn update_metric(shared: &Arc<SharedState>, chave: &str, metric: UsageMetric) {
+    lock_snapshot(shared)
+        .metrics
+        .insert(chave.to_string(), metric);
 }
 
 fn mark_success(shared: &Arc<SharedState>) {
@@ -2856,11 +3349,11 @@ fn clear_last_error(shared: &Arc<SharedState>) {
 }
 
 /// Registra uma amostra do uso atual no anel de historico (em memoria) e poda o
-/// que passou da janela de 5h. Chamado uma vez por ciclo de coleta, depois que os
-/// dois provedores ja' atualizaram o snapshot. Grava a % de cada janela por
-/// provedor, usando `None` quando o provedor esta' desabilitado ou com erro
-/// naquele instante. Uma amostra totalmente vazia (nenhum dado ainda) e' ignorada
-/// para nao abrir "furos" no comeco.
+/// que passou da janela de 5h. Chamado uma vez por ciclo de coleta, depois que
+/// todas as contas ja' atualizaram o snapshot. Grava a % de cada janela por conta;
+/// conta com erro (ou sem nenhuma janela) fica de fora daquela amostra. Uma amostra
+/// totalmente vazia (nenhum dado ainda) e' ignorada para nao abrir "furos" no
+/// comeco.
 ///
 /// Com `enabled == false` (grafico desligado na tela "Uso atual"), nao grava e
 /// limpa o historico ja' acumulado — para de gravar e "exclui os dados".
@@ -2872,32 +3365,25 @@ fn push_usage_sample(shared: &Arc<SharedState>, enabled: bool) {
         }
         return;
     }
-    let value = |metric: &Option<UsageMetric>, weekly: bool| -> Option<f64> {
-        let metric = metric.as_ref()?;
-        if metric.status == "erro" || metric.erro.is_some() {
-            return None;
-        }
-        if weekly {
-            metric.uso_percentual_7d
-        } else {
-            metric.uso_percentual
-        }
-    };
-    let sample = UsageSample {
-        t: Utc::now().to_rfc3339(),
-        claude_5h: value(&snapshot.claude_metric, false),
-        claude_7d: value(&snapshot.claude_metric, true),
-        codex_5h: value(&snapshot.codex_metric, false),
-        codex_7d: value(&snapshot.codex_metric, true),
-    };
-    if sample.claude_5h.is_none()
-        && sample.claude_7d.is_none()
-        && sample.codex_5h.is_none()
-        && sample.codex_7d.is_none()
-    {
+    let valores: BTreeMap<String, (Option<f64>, Option<f64>)> = snapshot
+        .metrics
+        .iter()
+        .filter(|(_, metric)| metric.status != "erro" && metric.erro.is_none())
+        .map(|(chave, metric)| {
+            (
+                chave.clone(),
+                (metric.uso_percentual, metric.uso_percentual_7d),
+            )
+        })
+        .filter(|(_, (sessao, semanal))| sessao.is_some() || semanal.is_some())
+        .collect();
+    if valores.is_empty() {
         return;
     }
-    snapshot.usage_history.push(sample);
+    snapshot.usage_history.push(UsageSample {
+        t: Utc::now().to_rfc3339(),
+        valores,
+    });
     prune_usage_history(&mut snapshot.usage_history);
 }
 
@@ -3340,6 +3826,9 @@ fn widget_detail(
     if metric.status == "erro" {
         return "erro".to_string();
     }
+    if metric.status == STATUS_SEM_LIMITES {
+        return "sem limites".to_string();
+    }
 
     let suffix = |iso: Option<&str>| {
         if mostrar_hora {
@@ -3473,6 +3962,7 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
             config_dir: app_data.join(APP_NAME_WINDOWS),
             config_file: app_data.join(APP_NAME_WINDOWS).join("config.json"),
             logs_dir: local_app_data.join(APP_NAME_WINDOWS).join("logs"),
+            config_do_cli: arquivos_config_do_cli(),
         });
     }
 
@@ -3491,6 +3981,7 @@ fn runtime_paths() -> Result<RuntimePaths, Box<dyn std::error::Error>> {
                 .join("state")
                 .join(APP_NAME_LINUX)
                 .join("logs"),
+            config_do_cli: arquivos_config_do_cli(),
         });
     }
 
@@ -3688,6 +4179,12 @@ async fn claude_login(app: AppHandle) -> Result<Value, String> {
             .title("Entrar no Claude")
             .inner_size(480.0, 780.0)
             .center()
+            // "Continuar com Google/Apple" abre um popup (`window.open`) que devolve o
+            // resultado para a pagina. Sem este tratador, o wry descarta o popup em
+            // silencio (`SetHandled(true)` sem janela) e a claude.ai mostra "Ocorreu
+            // um erro ao fazer login". `Allow` deixa o WebView2 abrir o popup dele,
+            // ligado a' pagina que o abriu.
+            .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)
             .build()
         {
             Ok(window) => window,
@@ -3787,18 +4284,46 @@ fn capture_claude_login(
         [org] => {
             let _ = window.close();
             let email = claude_auth::fetch_email(&client, &session_key);
-            claude_auth::store(&paths.config_dir, &session_key, &org.uuid, email)
+            salvar_login_claude(paths, &session_key, &org.uuid, email)
         }
         // Varias orgs com "chat": a coleta e' por org e escolher a errada faz o app
         // reportar 0% (ex.: org pessoal antiga vs. org de time usada). A propria janela
         // de login passa a mostrar a escolha (`claude-org.html`) e o login so' termina
         // quando o usuario confirma (`claude_select_org`, que fecha a janela) ou desiste.
         _ => {
+            conta_gravada_na_escolha_de_org().take();
             claude_auth::set_pending_login(claude_auth::PendingLogin { session_key, orgs });
             show_claude_org_picker(app, window);
-            wait_claude_org_choice(app, window, paths, cancel_flag)
+            wait_claude_org_choice(app, window, cancel_flag)
         }
     }
+}
+
+/// Status da conta que `claude_select_org` gravou, guardado para o `claude_login`
+/// que esperava a escolha devolve-lo com a chave: e' por ela que a aba Claude sabe
+/// qual conta acabou de entrar (e oferece o apelido).
+fn conta_gravada_na_escolha_de_org() -> MutexGuard<'static, Option<Value>> {
+    static SLOT: OnceLock<Mutex<Option<Value>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Grava um login do Claude no arquivo da conta — a mesma conta reconectada cai no
+/// mesmo arquivo, uma nova vira principal (se o provedor nao tem) ou extra; ver
+/// `contas::destino_do_login` — e devolve o status dela, com a chave.
+fn salvar_login_claude(
+    paths: &RuntimePaths,
+    session_key: &str,
+    organization_id: &str,
+    email: Option<String>,
+) -> Result<Value, String> {
+    let identidade = claude_auth::identity_of(organization_id, email.as_deref());
+    let (arquivo, chave) =
+        contas::destino_do_login(&paths.config_dir, Provedor::Claude, &identidade)?;
+    let mut status = claude_auth::store(&arquivo, session_key, organization_id, email)?;
+    status["chave"] = json!(chave);
+    Ok(status)
 }
 
 /// Navega a janela de login (que estava na claude.ai) para a pagina local de escolha
@@ -3816,12 +4341,12 @@ fn show_claude_org_picker(app: &AppHandle, window: &WebviewWindow) {
 }
 
 /// Espera a escolha da org na janela de login. `claude_select_org` consome o login
-/// pendente e fecha a janela; se ela fechar com o login ainda pendente, o usuario
-/// desistiu. Devolve o status gravado, ou "Login cancelado.".
+/// pendente, grava e fecha a janela; se ela fechar com o login ainda pendente, o
+/// usuario desistiu. Devolve o status da conta gravada (com a chave), ou "Login
+/// cancelado.".
 fn wait_claude_org_choice(
     app: &AppHandle,
     window: &WebviewWindow,
-    paths: &RuntimePaths,
     cancel_flag: &AtomicBool,
 ) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(5 * 60);
@@ -3834,7 +4359,9 @@ fn wait_claude_org_choice(
         if app.get_webview_window("claude-login").is_none() {
             return match claude_auth::take_pending_login() {
                 Some(_) => Err("Login cancelado.".to_string()),
-                None => Ok(claude_auth::status(&paths.config_dir)),
+                None => Ok(conta_gravada_na_escolha_de_org()
+                    .take()
+                    .unwrap_or(Value::Null)),
             };
         }
         thread::sleep(Duration::from_millis(300));
@@ -3898,16 +4425,134 @@ fn claude_org_utilization(
         .map(round_percent)
 }
 
-/// Status do login do Claude pelo navegador (sem rede), para a aba Claude.
-#[tauri::command]
-fn claude_auth_status(paths: State<'_, RuntimePaths>) -> Value {
-    claude_auth::status(&paths.config_dir)
+/// Contas conectadas do provedor, cada uma com o status do login (sem rede), a
+/// chave, se e' a principal e o apelido — a lista de contas da aba do provedor.
+fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
+    let prefs = contas::ler_prefs(config_dir);
+    let contas = contas::listar(config_dir, provedor);
+    // A conta da barra de tarefas e a enviada ao Loki: a escolhida, se ainda existe,
+    // senao a principal (a mesma regra de `chave_da_barra`/`envia_ao_loki`, aqui
+    // contra a lista do disco).
+    let resolvida = |escolhida: Option<&str>| {
+        escolhida
+            .filter(|chave| contas.iter().any(|c| c.chave == *chave))
+            .map(str::to_string)
+            .or_else(|| contas.iter().find(|c| c.principal).map(|c| c.chave.clone()))
+    };
+    let na_barra = resolvida(prefs.conta_na_barra(provedor));
+    let enviada = resolvida(prefs.conta_enviada(provedor));
+    let lista = contas
+        .into_iter()
+        .map(|conta| {
+            let mut status = match provedor {
+                Provedor::Claude => claude_auth::status(&conta.arquivo),
+                Provedor::Codex => codex_auth::status(&conta.arquivo),
+            };
+            status["chave"] = json!(conta.chave);
+            status["principal"] = json!(conta.principal);
+            status["apelido"] = json!(prefs.apelido(&conta.chave));
+            status["mostraNoWidget"] = json!(prefs.mostra_no_widget(&conta.chave));
+            status["naBarra"] = json!(na_barra.as_deref() == Some(conta.chave.as_str()));
+            status["enviada"] = json!(enviada.as_deref() == Some(conta.chave.as_str()));
+            status
+        })
+        .collect();
+    Value::Array(lista)
 }
 
-/// Remove as credenciais do login do Claude pelo navegador ("Desconectar").
+/// Contas do Claude com o status de cada login (sem rede), para a aba Claude.
 #[tauri::command]
-fn claude_logout(paths: State<'_, RuntimePaths>) -> Result<(), String> {
-    claude_auth::logout(&paths.config_dir)
+fn claude_auth_status(paths: State<'_, RuntimePaths>) -> Value {
+    status_das_contas(&paths.config_dir, Provedor::Claude)
+}
+
+/// Status da reabertura automatica (ultima tentativa e conta vigiada), relido pela
+/// aba Claude a cada poucos segundos: a conta do CLI muda por fora (`/login`).
+#[tauri::command]
+fn get_sessao_auto_status(
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+) -> SessaoAutoStatus {
+    status_da_sessao_auto(&paths, &shared)
+}
+
+/// Remove uma conta ("Remover"): apaga as credenciais e as preferencias dela. Se
+/// era a principal, a proxima do provedor assume.
+#[tauri::command]
+fn remover_conta(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::remover(&paths.config_dir, &conta)?;
+    lock_snapshot(shared.inner()).metrics.remove(&conta);
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
+}
+
+/// Define (ou limpa, com vazio) o apelido de uma conta, exibido no lugar do e-mail.
+#[tauri::command]
+fn set_conta_apelido(
+    paths: State<'_, RuntimePaths>,
+    conta: String,
+    apelido: Option<String>,
+) -> Result<(), String> {
+    contas::definir_apelido(&paths.config_dir, &conta, apelido)
+}
+
+/// Mostra ou esconde uma conta no widget (aba Widget). O provedor inteiro continua
+/// no `widget.mostraClaude/Codex` do config.json; esta e' a escolha dentro dele.
+#[tauri::command]
+fn set_conta_widget(
+    paths: State<'_, RuntimePaths>,
+    conta: String,
+    mostra: bool,
+) -> Result<(), String> {
+    contas::definir_mostra_no_widget(&paths.config_dir, &conta, mostra)
+}
+
+/// Escolhe a conta que a barra de tarefas mostra no provedor dela (aba Barra). A
+/// barra ja' troca, sem esperar o proximo ciclo.
+#[tauri::command]
+fn set_conta_barra(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::definir_conta_na_barra(&paths.config_dir, &conta)?;
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
+}
+
+/// Escolhe a conta enviada ao Loki no provedor dela (aba Envio). Vale a partir do
+/// proximo ciclo de coleta.
+#[tauri::command]
+fn set_conta_enviada(paths: State<'_, RuntimePaths>, conta: String) -> Result<(), String> {
+    contas::definir_conta_enviada(&paths.config_dir, &conta)
+}
+
+/// Torna uma conta a principal do provedor: a que as telas mostram primeiro (Uso
+/// atual, widget, Dashboard Codex), a padrao da barra e do envio ao Loki (quando
+/// nao ha' escolha nas abas Barra/Envio) e a unica que a versao anterior do app ve'.
+#[tauri::command]
+fn set_conta_principal(
+    app: AppHandle,
+    paths: State<'_, RuntimePaths>,
+    shared: State<'_, Arc<SharedState>>,
+    conta: String,
+) -> Result<(), String> {
+    contas::tornar_principal(&paths.config_dir, &conta)?;
+    // Sem esperar o proximo ciclo: tray, barra e widget passam a mostrar a nova
+    // principal (a metrica dela ja' esta' no snapshot).
+    if let Some(provedor) = Provedor::da_chave(&conta) {
+        lock_snapshot(shared.inner())
+            .principais
+            .insert(provedor.chave().to_string(), conta.clone());
+    }
+    let _ = refresh_tray(&app, shared.inner());
+    Ok(())
 }
 
 /// Cancela um login do Claude em andamento (botao "Cancelar"): faz o loop de
@@ -3933,13 +4578,10 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
             .ok_or_else(|| "Sessão de login expirou. Conecte novamente.".to_string())?;
         let client = http_client();
         let email = claude_auth::fetch_email(&client, &pending.session_key);
-        match claude_auth::store(
-            &paths.config_dir,
-            &pending.session_key,
-            &organization_id,
-            email,
-        ) {
+        match salvar_login_claude(&paths, &pending.session_key, &organization_id, email) {
             Ok(status) => {
+                // Antes de fechar a janela: e' o fechamento que libera a espera.
+                *conta_gravada_na_escolha_de_org() = Some(status.clone());
                 if let Some(window) = app.get_webview_window("claude-login") {
                     let _ = window.close();
                 }
@@ -3956,32 +4598,32 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
     .map_err(|error| error.to_string())?
 }
 
-/// Login do Codex pelo navegador (OAuth + PKCE), alternativa ao caminho do
-/// `auth.json`. E' bloqueante (sobe o servidor de callback e aguarda ate' ~5 min o
-/// usuario concluir no navegador), entao roda em `spawn_blocking` para nao travar o
-/// event loop. Grava os tokens no arquivo gerenciado e devolve o status do login
-/// (`{connected,email,expiresAt,accountId}`).
+/// Login do Codex pelo navegador (OAuth + PKCE). E' bloqueante (sobe o servidor de
+/// callback e aguarda ate' ~5 min o usuario concluir no navegador), entao roda em
+/// `spawn_blocking` para nao travar o event loop. Grava os tokens no arquivo da
+/// conta — a mesma conta reconectada cai no mesmo arquivo; ver
+/// `contas::destino_do_login` — e devolve o status do login
+/// (`{connected,email,expiresAt,accountId,chave}`).
 #[tauri::command]
 async fn codex_login(app: AppHandle) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = app.state::<RuntimePaths>().inner().clone();
-        codex_auth::login(&http_client(), &paths.config_dir)
+        let outra_conta = !contas::listar(&paths.config_dir, Provedor::Codex).is_empty();
+        let login = codex_auth::login(&http_client(), outra_conta)?;
+        let (arquivo, chave) =
+            contas::destino_do_login(&paths.config_dir, Provedor::Codex, &login.identity())?;
+        let mut status = codex_auth::save_login(&arquivo, &login)?;
+        status["chave"] = json!(chave);
+        Ok(status)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
-/// Status do login do Codex pelo navegador (sem rede), para a aba Codex das
-/// Configuracoes exibir "Conectado como ...".
+/// Contas do Codex com o status de cada login (sem rede), para a aba Codex.
 #[tauri::command]
 fn codex_auth_status(paths: State<'_, RuntimePaths>) -> Value {
-    codex_auth::status(&paths.config_dir)
-}
-
-/// Remove as credenciais do login pelo navegador ("Desconectar").
-#[tauri::command]
-fn codex_logout(paths: State<'_, RuntimePaths>) -> Result<(), String> {
-    codex_auth::logout(&paths.config_dir)
+    status_das_contas(&paths.config_dir, Provedor::Codex)
 }
 
 /// Cancela um login pelo navegador em andamento (botao "Cancelar"): libera a porta
@@ -4033,6 +4675,288 @@ mod tests {
             .with_ymd_and_hms(2026, 8, 19, hora, minuto, segundo)
             .single()
             .expect("horario local valido (dia sem salto de fuso)")
+    }
+
+    /// A versao anterior regrava o `config.json` so' com os campos que conhece e
+    /// descarta chaves novas de `providers.ordem`. Enquanto ela puder rodar na mesma
+    /// maquina, o formato do `config.json` nao pode mudar: o que e' novo (varias
+    /// contas) vai para `contas.json`. A fixture e' o `AppConfig::default()` da
+    /// 0.2.71.
+    #[test]
+    fn config_json_mantem_o_formato_da_versao_anterior() {
+        fn formato(valor: &Value) -> Value {
+            match valor {
+                Value::Object(campos) => Value::Object(
+                    campos
+                        .iter()
+                        .map(|(chave, valor)| (chave.clone(), formato(valor)))
+                        .collect(),
+                ),
+                Value::Array(_) => json!("array"),
+                Value::String(_) => json!("string"),
+                Value::Number(_) => json!("number"),
+                Value::Bool(_) => json!("bool"),
+                Value::Null => json!("null"),
+            }
+        }
+        let legado: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/config-legado.json"))
+                .expect("fixture valida");
+        let atual = serde_json::to_value(AppConfig::default()).expect("serializa");
+        assert_eq!(formato(&atual), formato(&legado));
+        // E o config da versao anterior continua sendo lido, sem cair no padrao.
+        let mut antigo = legado.clone();
+        antigo["usuario"] = json!("fulano");
+        let lido: AppConfig = serde_json::from_value(antigo).expect("config antigo le'");
+        assert_eq!(lido.usuario, "fulano");
+    }
+
+    fn pasta_de_teste(nome: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ai-usage-tray-agent-teste-{nome}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("criar a pasta do teste");
+        dir
+    }
+
+    #[test]
+    fn alvos_da_coleta_uma_por_conta_e_o_card_do_provedor_sem_conta() {
+        let dir = pasta_de_teste("alvos");
+        for (org, email) in [("org-a", "a@x.com"), ("org-b", "b@x.com")] {
+            let identidade = claude_auth::identity_of(org, Some(email));
+            let (arquivo, _) =
+                contas::destino_do_login(&dir, Provedor::Claude, &identidade).unwrap();
+            claude_auth::store(&arquivo, "sk", org, Some(email.to_string())).unwrap();
+        }
+        let config = AppConfig::default();
+        let alvos = alvos_da_coleta(&config, &dir);
+        let resumo: Vec<(&str, bool)> = alvos
+            .iter()
+            .map(|alvo| (alvo.provedor.chave(), alvo.principal))
+            .collect();
+        assert_eq!(
+            resumo,
+            vec![("claude", true), ("claude", false), ("codex", true)]
+        );
+        // Codex sem conta: a chave e' a do provedor e o arquivo e' o legado (ausente),
+        // que a coleta transforma no card de "nao conectado".
+        assert_eq!(alvos[2].chave, "codex");
+        assert_eq!(alvos[2].arquivo, codex_auth::auth_file(&dir));
+
+        let mut sem_codex = AppConfig::default();
+        sem_codex.providers.codex.habilitado = false;
+        assert_eq!(alvos_da_coleta(&sem_codex, &dir).len(), 2);
+    }
+
+    #[test]
+    fn so_a_conta_enviada_vai_ao_loki() {
+        let alvo = |chave: &str, principal: bool| Alvo {
+            provedor: Provedor::Claude,
+            chave: chave.to_string(),
+            arquivo: PathBuf::new(),
+            principal,
+        };
+        let (principal, outra) = (alvo("claude:a", true), alvo("claude:b", false));
+        let config = AppConfig::default();
+        // Sem escolha: so' a principal.
+        assert!(envia_ao_loki(&config, &principal, false, None));
+        assert!(!envia_ao_loki(&config, &outra, false, None));
+        // Com a outra escolhida na aba Envio: so' ela, e a principal deixa de ir.
+        assert!(envia_ao_loki(&config, &outra, false, Some("claude:b")));
+        assert!(!envia_ao_loki(&config, &principal, false, Some("claude:b")));
+        // Pausa geral ou o envio do provedor desligado seguram tudo.
+        assert!(!envia_ao_loki(&config, &principal, true, None));
+        let mut sem_claude = AppConfig::default();
+        sem_claude.envio.claude = false;
+        assert!(!envia_ao_loki(&sem_claude, &principal, false, None));
+        // A escolhida que nao esta' mais entre as contas do ciclo nao vale.
+        let mut prefs = contas::Prefs::default();
+        prefs
+            .conta_enviada
+            .insert("claude".to_string(), "claude:x".to_string());
+        assert_eq!(
+            enviada_escolhida(&prefs, &[principal], Provedor::Claude),
+            None
+        );
+    }
+
+    #[test]
+    fn dashboard_codex_usa_a_conta_pedida_senao_a_principal() {
+        let conta = |chave: &str, principal: bool| contas::Conta {
+            chave: chave.to_string(),
+            arquivo: PathBuf::new(),
+            principal,
+            email: None,
+        };
+        let lista = [conta("codex:a", true), conta("codex:b", false)];
+        let chave = |pedida| conta_do_dashboard(&lista, pedida).map(|c| c.chave.as_str());
+        assert_eq!(chave(Some("codex:b")), Some("codex:b"));
+        assert_eq!(chave(None), Some("codex:a"));
+        // Removida desde que a tela montou o seletor: volta para a principal.
+        assert_eq!(chave(Some("codex:x")), Some("codex:a"));
+        assert_eq!(conta_do_dashboard(&[], None).map(|c| &c.chave), None);
+    }
+
+    #[test]
+    fn claude_sem_nenhuma_janela_e_sem_limites_e_nao_erro() {
+        let resposta = |json: &str| -> ClaudeUsageResponse { serde_json::from_str(json).unwrap() };
+        // Conta gratuita: a API nao traz nenhuma janela (ausentes ou nulas).
+        for json in ["{}", r#"{"five_hour":null,"seven_day":null}"#] {
+            let metrica = metrica_do_claude("teste", resposta(json)).unwrap();
+            assert_eq!(metrica.status, STATUS_SEM_LIMITES);
+            assert_eq!(metrica.erro, None);
+            assert_eq!(metrica.uso_percentual, None);
+            assert_eq!(metrica.uso_percentual_7d, None);
+        }
+        // Com a sessao, como sempre.
+        let metrica = metrica_do_claude(
+            "teste",
+            resposta(r#"{"five_hour":{"utilization":34.0,"resets_at":null}}"#),
+        )
+        .unwrap();
+        assert_eq!(metrica.status, "ok");
+        assert_eq!(metrica.uso_percentual, Some(34.0));
+        // So' a semanal, sem a sessao: continua erro (nao e' a conta gratuita).
+        assert!(
+            metrica_do_claude("teste", resposta(r#"{"seven_day":{"utilization":10.0}}"#)).is_err()
+        );
+    }
+
+    #[test]
+    fn barra_mostra_a_escolhida_senao_a_principal() {
+        let metrica = UsageMetric {
+            usuario: "teste".to_string(),
+            ferramenta: "claude".to_string(),
+            uso_percentual: Some(10.0),
+            restante_percentual: Some(90.0),
+            status: "ok".to_string(),
+            coletado_em: Utc::now().to_rfc3339(),
+            reset_em: None,
+            erro: None,
+            uso_percentual_7d: None,
+            restante_percentual_7d: None,
+            reset_em_7d: None,
+        };
+        let metrics: BTreeMap<String, UsageMetric> = ["claude:a", "claude:b"]
+            .iter()
+            .map(|chave| (chave.to_string(), metrica.clone()))
+            .collect();
+        let principal = Some("claude:a");
+        assert_eq!(
+            chave_da_barra(Some("claude:b"), &metrics, principal),
+            Some("claude:b")
+        );
+        // Sem escolha, a principal.
+        assert_eq!(chave_da_barra(None, &metrics, principal), Some("claude:a"));
+        // A escolhida sumiu (removida, ou o provedor foi desligado): a principal.
+        assert_eq!(
+            chave_da_barra(Some("claude:x"), &metrics, principal),
+            Some("claude:a")
+        );
+    }
+
+    #[test]
+    fn sessao_auto_vigia_a_conta_do_cli() {
+        let conta = |chave: &str, org: &str, email: Option<&str>| ContaClaude {
+            chave: chave.to_string(),
+            organizacao: Some(org.to_string()),
+            email: email.map(str::to_string),
+        };
+        let cli = |org: &str, email: Option<&str>| LoginDoCli {
+            organizacao: org.to_string(),
+            email: email.map(str::to_string),
+            nome_da_org: None,
+        };
+        let chave = |vigiada: ContaVigiada| match vigiada {
+            ContaVigiada::Conta {
+                chave, pelo_cli, ..
+            } => Ok((chave, pelo_cli)),
+            outra => Err(outra),
+        };
+        let pessoal = conta("claude:p", "org-p", Some("eu@gmail.com"));
+        let trabalho = conta("claude:t", "org-t", Some("eu@empresa.com"));
+        let colega = conta("claude:c", "org-t", Some("colega@empresa.com"));
+
+        // O CLI na conta de trabalho: vigia ela, mesmo que a principal seja a pessoal.
+        let duas = [pessoal, trabalho];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &duas,
+                Some(&cli("org-t", Some("EU@empresa.com ")))
+            )),
+            Ok(("claude:t".to_string(), true))
+        );
+        // Mesma org de time, pessoas diferentes: o e-mail decide.
+        let time = [colega, conta("claude:t", "org-t", Some("eu@empresa.com"))];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &time,
+                Some(&cli("org-t", Some("eu@empresa.com")))
+            )),
+            Ok(("claude:t".to_string(), true))
+        );
+        // O CLI numa conta que nao esta' no app: nao dispara, mesmo com uma conta so'.
+        let uma = [conta("claude:p", "org-p", Some("eu@gmail.com"))];
+        assert_eq!(
+            escolher_conta_vigiada(&uma, Some(&cli("org-x", Some("eu@gmail.com")))),
+            ContaVigiada::CliEmOutraConta
+        );
+        // A mesma org, mas outra pessoa: tambem e' outra conta.
+        assert_eq!(
+            escolher_conta_vigiada(&uma, Some(&cli("org-p", Some("outro@gmail.com")))),
+            ContaVigiada::CliEmOutraConta
+        );
+        // Conta do app sem e-mail: a org basta.
+        let sem_email = [conta("claude:p", "org-p", None)];
+        assert_eq!(
+            chave(escolher_conta_vigiada(
+                &sem_email,
+                Some(&cli("org-p", Some("eu@gmail.com")))
+            )),
+            Ok(("claude:p".to_string(), true))
+        );
+        // Login do CLI ilegivel: com uma conta, usa ela (como antes); com duas, para.
+        assert_eq!(
+            chave(escolher_conta_vigiada(&uma, None)),
+            Ok(("claude:p".to_string(), false))
+        );
+        assert_eq!(
+            escolher_conta_vigiada(&duas, None),
+            ContaVigiada::CliDesconhecido
+        );
+        assert_eq!(escolher_conta_vigiada(&[], None), ContaVigiada::SemConta);
+    }
+
+    #[test]
+    fn le_o_login_do_cli_do_claude_json() {
+        // Chaves que so' diferem na caixa (como os caminhos em `projects` no Windows)
+        // nao atrapalham a leitura.
+        let texto = r#"{
+            "projects": { "c:/x": {}, "C:/x": {} },
+            "oauthAccount": {
+                "organizationUuid": " org-1 ",
+                "emailAddress": "eu@empresa.com",
+                "organizationName": "Empresa",
+                "accountUuid": "ignorado"
+            }
+        }"#;
+        assert_eq!(
+            ler_login_do_cli(texto),
+            Some(LoginDoCli {
+                organizacao: "org-1".to_string(),
+                email: Some("eu@empresa.com".to_string()),
+                nome_da_org: Some("Empresa".to_string()),
+            })
+        );
+        // Sem login OAuth (ex.: CLI por chave de API), sem org ou arquivo invalido.
+        assert_eq!(ler_login_do_cli(r#"{"projects":{}}"#), None);
+        assert_eq!(
+            ler_login_do_cli(r#"{"oauthAccount":{"organizationUuid":""}}"#),
+            None
+        );
+        assert_eq!(ler_login_do_cli("nao e' json"), None);
     }
 
     #[test]
@@ -4103,6 +5027,7 @@ mod tests {
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: Vec::new(),
         };
         let config = SessaoAutoConfig {
             habilitado: true,
@@ -4139,6 +5064,7 @@ exit /b 1
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: Vec::new(),
         };
         let config = SessaoAutoConfig {
             habilitado: true,
@@ -4178,10 +5104,30 @@ exit /b 1
         )
         .expect("gravar o CLI falso");
 
+        // A conta do app e o login do CLI na mesma conta: e' essa que a reabertura
+        // vigia (e nao o `.claude.json` real da maquina).
+        let identidade = claude_auth::identity_of("org-teste", Some("teste@exemplo.com"));
+        let (arquivo, chave) = contas::destino_do_login(&base, Provedor::Claude, &identidade)
+            .expect("destino da conta de teste");
+        claude_auth::store(
+            &arquivo,
+            "sk-teste",
+            "org-teste",
+            Some("teste@exemplo.com".to_string()),
+        )
+        .expect("gravar a conta de teste");
+        let config_do_cli = base.join("claude-cli.json");
+        fs::write(
+            &config_do_cli,
+            r#"{"oauthAccount":{"organizationUuid":"org-teste","emailAddress":"teste@exemplo.com"}}"#,
+        )
+        .expect("gravar o .claude.json de teste");
+
         let paths = RuntimePaths {
             config_dir: base.clone(),
             config_file: base.join("config.json"),
             logs_dir: base.join("logs"),
+            config_do_cli: vec![config_do_cli],
         };
         let mut config = AppConfig::default();
         config.providers.claude.sessao_auto = SessaoAutoConfig {
@@ -4197,20 +5143,26 @@ exit /b 1
             pending_update: Mutex::new(None),
             sessao_auto: Mutex::new(SessaoAutoState::default()),
         });
-        // O gatilho do recurso: coleta bem-sucedida sem janela de sessao.
-        lock_snapshot(&shared).claude_metric = Some(UsageMetric {
-            usuario: "teste".to_string(),
-            ferramenta: "claude".to_string(),
-            uso_percentual: Some(0.0),
-            restante_percentual: Some(100.0),
-            status: "ok".to_string(),
-            coletado_em: Utc::now().to_rfc3339(),
-            reset_em: None,
-            erro: None,
-            uso_percentual_7d: None,
-            restante_percentual_7d: None,
-            reset_em_7d: None,
-        });
+        // O gatilho do recurso: coleta bem-sucedida da conta do CLI sem janela de sessao.
+        {
+            let mut snapshot = lock_snapshot(&shared);
+            snapshot.metrics.insert(
+                chave.clone(),
+                UsageMetric {
+                    usuario: "teste".to_string(),
+                    ferramenta: "claude".to_string(),
+                    uso_percentual: Some(0.0),
+                    restante_percentual: Some(100.0),
+                    status: "ok".to_string(),
+                    coletado_em: Utc::now().to_rfc3339(),
+                    reset_em: None,
+                    erro: None,
+                    uso_percentual_7d: None,
+                    restante_percentual_7d: None,
+                    reset_em_7d: None,
+                },
+            );
+        }
 
         maybe_reopen_claude_session(&paths, &shared, &config);
 

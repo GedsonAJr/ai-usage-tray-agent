@@ -3,6 +3,7 @@
 // `save_settings`. Antes era um formulário servido por HTTP no navegador.
 import { invoke } from "@tauri-apps/api/core";
 import { animaTrocaDeAba } from "./anima";
+import { escapeHtml } from "./usage-format";
 
 interface CodexConfig {
   habilitado: boolean;
@@ -56,12 +57,19 @@ interface AppConfig {
   widget: WidgetConfig;
   servidor: ServerConfig;
 }
-/** Resultado da última reabertura automática de sessão (memória do backend). */
+/** Resultado da última reabertura automática de sessão (memória do backend) e a
+ * conta vigiada agora (calculada a cada leitura). */
 interface SessaoAutoStatus {
   ultimaTentativaEm?: string | null;
   ultimoOk?: boolean | null;
   ultimoErro?: string | null;
   emExecucao?: boolean;
+  /// Apelido (senão e-mail) da conta cuja janela de 5h decide o disparo.
+  contaVigiada?: string | null;
+  /// A conta vigiada é a do login do CLI (e não só a única do app).
+  contaDoCli?: boolean;
+  /// Por que a reabertura está parada, quando não há conta para vigiar.
+  aviso?: string | null;
 }
 interface SettingsData {
   autostart: boolean;
@@ -103,6 +111,7 @@ function fillForm(data: SettingsData): void {
 
   $<HTMLInputElement>("set-claudeHab").checked = claude.habilitado !== false;
   $<HTMLInputElement>("set-claudeTaskbar").checked = claude.mostraNaTaskbarWindows !== false;
+  syncCartoes();
   // Guarda o caminho do CLI (editável só pelo config.json) para devolvê-lo no save
   // — o painel manda o bloco `providers` inteiro, então omitir zeraria o valor.
   claudeSessaoAutoCliPath = claude.sessaoAuto?.caminhoCli ?? "";
@@ -122,6 +131,7 @@ function fillForm(data: SettingsData): void {
 
   $<HTMLInputElement>("set-wdgClaude").checked = widget?.mostraClaude !== false;
   $<HTMLInputElement>("set-wdgCodex").checked = widget?.mostraCodex !== false;
+  syncCartoes();
   $<HTMLInputElement>("set-wdgTopo").checked = widget?.sempreNaFrente !== false;
   $<HTMLInputElement>("set-wdgFundo").value = widget?.fundo ?? "";
   $<HTMLSelectElement>("set-wdgJanelas").value = normJanelas(widget?.janelas);
@@ -335,6 +345,7 @@ async function loadEnvioToggles(): Promise<void> {
     const st = await invoke<EnvioToggles>("get_envio_state");
     $<HTMLInputElement>("set-codexEnviar").checked = !!st.codex?.enviar;
     $<HTMLInputElement>("set-claudeEnviar").checked = !!st.claude?.enviar;
+    syncCartoes();
   } catch {
     // transitório; mantém o estado atual dos checkboxes
   }
@@ -350,199 +361,380 @@ async function setEnvioProvider(ferramenta: "codex" | "claude", enviar: boolean)
   }
 }
 
-// Autenticação do Codex: só pelo navegador (OAuth), feito à parte do config.json
-// pelos comandos codex_login/codex_logout; o status vem de codex_auth_status.
-interface CodexAuthStatus {
+// Contas conectadas de cada provedor (abas Codex e Claude). O login é só pelo
+// navegador, à parte do config.json: `codex_login`/`claude_login` adicionam uma
+// conta, ou reconectam a existente quando é a mesma. A lista vem de
+// `codex_auth_status`/`claude_auth_status`. A conta principal é a que o tray, a
+// barra, o widget e o envio ao Loki usam.
+type ProvedorConta = "codex" | "claude";
+
+/// Espelha `contas::MAX_CONTAS_POR_PROVEDOR` (limite de design). O backend recusa a
+/// conta a mais de qualquer forma; aqui só esconde o "Adicionar conta".
+const MAX_CONTAS_POR_PROVEDOR = 2;
+/// Espelha `contas::MAX_APELIDO` (caracteres). O backend corta o excedente de
+/// qualquer forma; aqui o campo não deixa digitar além.
+const MAX_APELIDO = 20;
+
+interface ContaStatus {
+  /// "<provedor>:<id>", estável entre reconexões.
+  chave: string;
+  principal: boolean;
+  apelido: string | null;
+  /// A conta aparece no widget (quando o provedor também está ligado lá).
+  mostraNoWidget: boolean;
+  /// É a conta que a barra de tarefas mostra no provedor (uma por provedor; a
+  /// principal, sem escolha).
+  naBarra: boolean;
+  /// É a conta enviada ao Loki no provedor (uma por provedor; a principal, sem
+  /// escolha).
+  enviada: boolean;
   connected: boolean;
   needsReconnect: boolean;
   email: string | null;
-  expiresAt: number | null;
 }
-// Reflete o último status conhecido; usado pelos avisos de "sem credenciais".
-let codexConnected = false;
-// Enquanto true, o auto-refresh não relê o status (não atropela o "Aguardando…").
-let codexLoginInProgress = false;
 
-/// Reflete o status do login pelo navegador na UI (texto, botões) e nos avisos.
-/// - Conectado e saudável: só status + Desconectar (sem botão de conectar).
-/// - Conectado mas com falha de renovação automática: mostra "Reconectar".
-/// - Não conectado: mostra "Conectar com o navegador".
-function applyCodexAuthStatus(st: CodexAuthStatus): void {
-  // Para os avisos de coleta, uma sessão que precisa reconectar conta como "sem
-  // credenciais" (a coleta não vai funcionar até reconectar).
-  codexConnected = !!st.connected && !st.needsReconnect;
-  const statusEl = $("set-codexAuthStatus");
-  const loginBtn = $("set-codexLogin") as HTMLElement;
-  const logoutBtn = $("set-codexLogout") as HTMLElement;
+interface ProvedorUi {
+  nome: string;
+  contas: ContaStatus[];
+  /// Assinatura da última lista desenhada: o auto-refresh de 5s só redesenha quando
+  /// algo mudou, para não tirar o foco do campo de apelido no meio da digitação.
+  assinatura: string;
+  /// Enquanto true, o auto-refresh não relê a lista (não atropela o "Aguardando…").
+  loginEmAndamento: boolean;
+  /// Status de uma conta que precisa reconectar (o motivo difere entre provedores).
+  expirada: string;
+}
 
-  statusEl.classList.remove("ok", "warn");
-  if (st.connected && !st.needsReconnect) {
-    statusEl.textContent = st.email ? `Conectado como ${st.email}.` : "Conectado.";
-    statusEl.classList.add("ok");
-    loginBtn.hidden = true;
-    logoutBtn.hidden = false;
-  } else if (st.connected && st.needsReconnect) {
-    statusEl.textContent = "Não foi possível renovar a sessão automaticamente. Reconecte.";
-    statusEl.classList.add("warn");
-    loginBtn.hidden = false;
-    loginBtn.textContent = "Reconectar";
-    logoutBtn.hidden = false;
-  } else {
-    statusEl.textContent = "Conecte sua conta para iniciar a coleta.";
-    loginBtn.hidden = false;
-    loginBtn.textContent = "Conectar com o navegador";
-    logoutBtn.hidden = true;
+const PROVEDORES: Record<ProvedorConta, ProvedorUi> = {
+  codex: {
+    nome: "Codex",
+    contas: [],
+    assinatura: "",
+    loginEmAndamento: false,
+    expirada: "Não foi possível renovar a sessão automaticamente. Reconecte.",
+  },
+  claude: {
+    nome: "Claude",
+    contas: [],
+    assinatura: "",
+    loginEmAndamento: false,
+    expirada: "Sessão expirada. Reconecte para continuar a coleta.",
+  },
+};
+
+/// Há ao menos uma conta que coleta (conectada e sem precisar reconectar)? Usado
+/// pelos avisos de "sem credenciais".
+function temContaAtiva(p: ProvedorConta): boolean {
+  return PROVEDORES[p].contas.some((c) => c.connected && !c.needsReconnect);
+}
+
+function contaHtml(p: ProvedorConta, c: ContaStatus, varias: boolean): string {
+  const ui = PROVEDORES[p];
+  const ativa = c.connected && !c.needsReconnect;
+  const status = !c.connected ? "Desconectada." : c.needsReconnect ? ui.expirada : "Conectada.";
+  // Com uma conta só, "principal" não distingue nada: o selo e o botão aparecem a
+  // partir da segunda.
+  const selo = varias && c.principal ? ' <span class="conta-selo">Principal</span>' : "";
+  const botao = (acao: string, texto: string): string =>
+    `<button type="button" class="btn btn-sm" data-acao="${acao}">${texto}</button>`;
+  return `<div class="conta" data-conta="${escapeHtml(c.chave)}">
+    <div class="conta-info">
+      <div class="conta-nome">${escapeHtml(c.email ?? "Conta sem e-mail")}${selo}</div>
+      <div class="conta-status ${ativa ? "ok" : "warn"}">${status}</div>
+    </div>
+    <input type="text" class="conta-apelido" placeholder="Apelido" maxlength="${MAX_APELIDO}" value="${escapeHtml(c.apelido ?? "")}">
+    <div class="conta-acoes">
+      ${c.needsReconnect || !c.connected ? botao("reconectar", "Reconectar") : ""}
+      ${varias && !c.principal ? botao("principal", "Tornar principal") : ""}
+      ${botao("remover", "Remover")}
+    </div>
+  </div>`;
+}
+
+/// Desenha a lista de contas do provedor e ajusta o botão de login ("Conectar" sem
+/// conta, "Adicionar conta" com ao menos uma, nenhum no limite) e o texto de status.
+function renderContas(p: ProvedorConta): void {
+  const ui = PROVEDORES[p];
+  const varias = ui.contas.length > 1;
+  const noLimite = ui.contas.length >= MAX_CONTAS_POR_PROVEDOR;
+  $(`set-${p}Contas`).innerHTML = ui.contas.map((c) => contaHtml(p, c, varias)).join("");
+  const loginBtn = $(`set-${p}Login`);
+  loginBtn.textContent = ui.contas.length ? "Adicionar conta" : "Conectar com o navegador";
+  loginBtn.hidden = ui.loginEmAndamento || noLimite;
+  const statusEl = $(`set-${p}AuthStatus`);
+  if (!ui.loginEmAndamento) {
+    statusEl.textContent = noLimite
+      ? `Limite de ${MAX_CONTAS_POR_PROVEDOR} contas. Remova uma para conectar outra.`
+      : "Conecte sua conta para iniciar a coleta.";
+    statusEl.hidden = ui.contas.length > 0 && !noLimite;
   }
   syncProviderHints();
+  renderWidgetContas(p);
+  renderEscolhaContas(p, "barra", (c) => c.naBarra);
+  renderEscolhaContas(p, "envio", (c) => c.enviada);
 }
 
-/// Lê o status do login pelo navegador (sem rede). Chamado ao abrir a tela.
-async function loadCodexAuthStatus(): Promise<void> {
+/// Nome da conta nas listas das abas Widget, Barra e Envio: apelido, com o e-mail
+/// embaixo (sem apelido, o e-mail é o nome).
+function nomeDaConta(c: ContaStatus): string {
+  const nome = c.apelido ?? c.email ?? "Conta sem e-mail";
+  const email = c.apelido && c.email ? `<span class="prov-conta-email">${escapeHtml(c.email)}</span>` : "";
+  return `<span class="prov-conta-textos"><span class="prov-conta-nome">${escapeHtml(nome)}</span>${email}</span>`;
+}
+
+/// Lista de contas do cartão de um provedor nas abas Widget/Barra/Envio. Só com 2
+/// ou mais contas: com uma só, o switch do provedor já basta. `item` desenha o
+/// controle de cada conta.
+function renderListaContas(p: ProvedorConta, aba: "wdg" | "barra" | "envio", item: (c: ContaStatus) => string): void {
+  const ui = PROVEDORES[p];
+  const lista = $(`set-${aba}${ui.nome}Contas`);
+  const varias = ui.contas.length > 1;
+  lista.hidden = !varias;
+  lista.innerHTML = varias
+    ? ui.contas.map((c) => `<label class="prov-conta">${nomeDaConta(c)}${item(c)}</label>`).join("")
+    : "";
+}
+
+/// Abas Barra e Envio: vai uma conta por provedor (a barra mostra uma; o Loki
+/// recebe uma). O cartão lista as contas com um radio para escolher qual; sem
+/// escolha, vem marcada a principal. Ligar o provedor continua no switch de cima.
+function renderEscolhaContas(p: ProvedorConta, aba: "barra" | "envio", marcada: (c: ContaStatus) => boolean): void {
+  renderListaContas(p, aba, (c) =>
+    `<input type="radio" class="prov-conta-radio" name="${aba}-${p}" data-conta="${escapeHtml(c.chave)}"${marcada(c) ? " checked" : ""}>`);
+}
+
+/// Aba Widget: um switch por conta (qualquer combinação delas aparece).
+function renderWidgetContas(p: ProvedorConta): void {
+  renderListaContas(p, "wdg", (c) =>
+    `<span class="switch switch-sm"><input type="checkbox" data-conta="${escapeHtml(c.chave)}"${c.mostraNoWidget !== false ? " checked" : ""}>` +
+    `<span class="switch-track"></span></span>`);
+}
+
+/// Provedor desligado numa das abas Widget/Barra/Envio: as contas dele no cartão
+/// ficam apagadas e sem clique.
+function syncCartoes(): void {
+  for (const nome of ["Claude", "Codex"]) {
+    const n = nome.toLowerCase();
+    const cartoes: [string, string][] = [["wdg", `set-wdg${nome}`], ["barra", `set-${n}Taskbar`], ["envio", `set-${n}Enviar`]];
+    for (const [aba, idSwitch] of cartoes) {
+      $(`set-${aba}${nome}Card`).classList.toggle("off", !$<HTMLInputElement>(idSwitch).checked);
+    }
+  }
+}
+
+/// Grava a escolha de conta de uma das abas (`set_conta_widget`/`_barra`/
+/// `_enviada`), à parte do auto-save do formulário (que só cuida do config.json).
+async function salvarContaDaAba(p: ProvedorConta, comando: string, args: Record<string, unknown>, falha: string): Promise<void> {
   try {
-    applyCodexAuthStatus(await invoke<CodexAuthStatus>("codex_auth_status"));
+    await invoke(comando, args);
+    setSaved();
+  } catch (e) {
+    setMsg(`${falha}: ` + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  // Com erro, a lista redesenhada devolve o controle ao valor gravado.
+  await loadContas(p, true);
+}
+
+/// Relê a lista de contas (sem rede). Sem `forcar`, só redesenha se mudou.
+async function loadContas(p: ProvedorConta, forcar = false): Promise<void> {
+  try {
+    const contas = await invoke<ContaStatus[]>(`${p}_auth_status`);
+    const assinatura = JSON.stringify(contas);
+    const ui = PROVEDORES[p];
+    if (!forcar && assinatura === ui.assinatura) return;
+    ui.contas = contas;
+    ui.assinatura = assinatura;
+    renderContas(p);
   } catch {
     // transitório; mantém o estado atual
   }
 }
 
 /// Dispara o login pelo navegador (bloqueante no backend até o usuário concluir ou
-/// cancelar). Enquanto aguarda, mostra o botão "Cancelar" (que libera a porta 1455
-/// e faz o comando retornar sem esperar o timeout).
-async function codexLogin(): Promise<void> {
-  const btn = $("set-codexLogin") as HTMLElement;
-  const cancelBtn = $("set-codexLoginCancel") as HTMLElement;
-  // Enquanto aguarda, esconde o "Conectar" e mostra o "Cancelar" no lugar.
-  btn.hidden = true;
+/// cancelar). Enquanto aguarda, troca o botão de login pelo "Cancelar" (que no
+/// Codex libera a porta 1455). No Claude, se a conta tiver mais de uma org, a
+/// escolha acontece na própria janela de login (claude-org.html) e o comando só
+/// volta depois dela.
+async function contaLogin(p: ProvedorConta): Promise<void> {
+  const ui = PROVEDORES[p];
+  const cancelBtn = $(`set-${p}LoginCancel`);
+  const statusEl = $(`set-${p}AuthStatus`);
+  const outraConta = ui.contas.length > 0;
+  const antes = new Set(ui.contas.map((c) => c.chave));
+  let nova: string | null = null;
+  ui.loginEmAndamento = true;
+  $(`set-${p}Login`).hidden = true;
   cancelBtn.hidden = false;
-  codexLoginInProgress = true;
-  $("set-codexAuthStatus").textContent = "Aguardando o login no navegador…";
+  statusEl.hidden = false;
+  // O navegador do sistema pode já estar logado na OpenAI. O backend pede a tela de
+  // login mesmo assim, mas se ela não aparecer, a saída é sair da conta lá.
+  statusEl.textContent =
+    p === "codex" && outraConta
+      ? "Aguardando o login no navegador… Se ele entrar direto na conta já conectada, saia dela no navegador e tente de novo."
+      : "Aguardando o login no navegador…";
   try {
-    applyCodexAuthStatus(await invoke<CodexAuthStatus>("codex_login"));
-    setMsg("Codex conectado.", "ok");
+    const status = await invoke<{ chave?: string } | null>(`${p}_login`);
+    setMsg(`${ui.nome} conectado.`, "ok");
+    if (status?.chave && !antes.has(status.chave)) nova = status.chave;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (/cancel/i.test(msg)) {
-      setMsg(""); // cancelamento é ação do usuário; não polui o topo com aviso
-    } else {
-      setMsg("Falha no login do Codex: " + msg, "err");
+    // Cancelamento é ação do usuário; não polui o topo com aviso.
+    if (/cancel/i.test(msg)) setMsg("");
+    else setMsg(`Falha no login do ${ui.nome}: ${msg}`, "err");
+  } finally {
+    ui.loginEmAndamento = false;
+    cancelBtn.hidden = true;
+    await loadContas(p, true);
+  }
+  const conta = ui.contas.find((c) => c.chave === nova);
+  if (conta) await pedirApelido(p, conta);
+}
+
+/// Oferece o apelido de uma conta que acabou de ser ADICIONADA, num modal: no campo
+/// da lista ele passava despercebido. É opcional ("Agora não", Esc ou clique fora
+/// fecham sem gravar). Reconectar uma conta que já estava na lista não pergunta.
+function pedirApelido(p: ProvedorConta, conta: ContaStatus): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = $("apelido-overlay");
+    const form = $<HTMLFormElement>("apelido-form");
+    const input = $<HTMLInputElement>("apelido-input");
+    const salvar = $<HTMLButtonElement>("apelido-salvar");
+    const pular = $<HTMLButtonElement>("apelido-pular");
+    $("apelido-conta").innerHTML =
+      `${PROVEDORES[p].nome} conectado como <b>${escapeHtml(conta.email ?? "conta sem e-mail")}</b>.`;
+    input.maxLength = MAX_APELIDO;
+    input.value = "";
+    salvar.disabled = true;
+    overlay.classList.remove("hide");
+    input.focus();
+
+    const onInput = (): void => { salvar.disabled = !input.value.trim(); };
+    const fechar = (): void => {
+      overlay.classList.add("hide");
+      input.removeEventListener("input", onInput);
+      form.removeEventListener("submit", onSubmit);
+      pular.removeEventListener("click", fechar);
+      overlay.removeEventListener("mousedown", onBackdrop);
+      document.removeEventListener("keydown", onKey);
+      resolve();
+    };
+    const onSubmit = (e: SubmitEvent): void => {
+      e.preventDefault();
+      const apelido = input.value.trim();
+      if (!apelido) return;
+      fechar();
+      void salvarApelido(p, conta.chave, apelido);
+    };
+    const onBackdrop = (e: MouseEvent): void => { if (e.target === overlay) fechar(); };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === "Escape") fechar(); };
+    input.addEventListener("input", onInput);
+    form.addEventListener("submit", onSubmit);
+    pular.addEventListener("click", fechar);
+    overlay.addEventListener("mousedown", onBackdrop);
+    document.addEventListener("keydown", onKey);
+  });
+}
+
+/// Cancela um login em andamento (o contaLogin pendente rejeita e se recupera).
+async function contaLoginCancel(p: ProvedorConta): Promise<void> {
+  try {
+    await invoke(`${p}_login_cancel`);
+  } catch {
+    // best-effort; o login pendente ainda expira sozinho no timeout
+  }
+}
+
+async function tornarPrincipal(p: ProvedorConta, chave: string): Promise<void> {
+  try {
+    await invoke("set_conta_principal", { conta: chave });
+    setSaved();
+  } catch (e) {
+    setMsg("Falha ao trocar a conta principal: " + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  await loadContas(p, true);
+}
+
+async function removerConta(p: ProvedorConta, chave: string): Promise<void> {
+  try {
+    await invoke("remover_conta", { conta: chave });
+    setMsg("Conta removida.", "ok");
+  } catch (e) {
+    setMsg("Falha ao remover a conta: " + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  await loadContas(p, true);
+}
+
+async function salvarApelido(p: ProvedorConta, chave: string, apelido: string): Promise<void> {
+  try {
+    await invoke("set_conta_apelido", { conta: chave, apelido });
+    setSaved();
+  } catch (e) {
+    setMsg("Falha ao salvar o apelido: " + (e instanceof Error ? e.message : String(e)), "err");
+  }
+  await loadContas(p);
+}
+
+/// Liga os eventos da lista de contas e dos botões de login de um provedor. A
+/// lista é redesenhada por innerHTML, então os cliques são tratados por delegação.
+function wireContas(p: ProvedorConta): void {
+  $(`set-${p}Login`).addEventListener("click", () => void contaLogin(p));
+  $(`set-${p}LoginCancel`).addEventListener("click", () => void contaLoginCancel(p));
+  const lista = $(`set-${p}Contas`);
+  lista.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-acao]");
+    const chave = btn?.closest<HTMLElement>(".conta")?.dataset.conta;
+    if (!btn || !chave) return;
+    const acao = btn.dataset.acao;
+    if (acao === "reconectar") {
+      void contaLogin(p);
+    } else if (acao === "principal") {
+      void tornarPrincipal(p, chave);
+    } else if (acao === "remover") {
+      // Remover apaga as credenciais (voltar exige novo login): pede um segundo
+      // clique no mesmo botão, que volta ao normal sozinho se não vier.
+      if (btn.dataset.confirmar !== "1") {
+        btn.dataset.confirmar = "1";
+        btn.textContent = "Confirmar remoção";
+        btn.classList.add("danger");
+        window.setTimeout(() => {
+          delete btn.dataset.confirmar;
+          btn.textContent = "Remover";
+          btn.classList.remove("danger");
+        }, 3000);
+        return;
+      }
+      void removerConta(p, chave);
     }
-    // Reavalia o estado (mostra "Conectar"/"Reconectar" conforme o caso).
-    await loadCodexAuthStatus();
-  } finally {
-    // A visibilidade do "Conectar/Reconectar" é decidida por applyCodexAuthStatus;
-    // aqui só escondemos o "Cancelar".
-    codexLoginInProgress = false;
-    cancelBtn.hidden = true;
-  }
-}
-
-/// Cancela um login em andamento (o codexLogin pendente rejeita e se recupera).
-async function codexLoginCancel(): Promise<void> {
-  try {
-    await invoke("codex_login_cancel");
-  } catch {
-    // best-effort; o login pendente ainda expira sozinho no timeout
-  }
-}
-
-/// Remove as credenciais do login pelo navegador.
-async function codexLogout(): Promise<void> {
-  try {
-    await invoke("codex_logout");
-    applyCodexAuthStatus({ connected: false, needsReconnect: false, email: null, expiresAt: null });
-    setMsg("Codex desconectado.", "ok");
-  } catch (e) {
-    setMsg("Falha ao desconectar: " + (e instanceof Error ? e.message : String(e)), "err");
-  }
-}
-
-// Autenticação do Claude: só pelo navegador, feito à parte do config.json pelos
-// comandos claude_login/claude_logout; o status vem de claude_auth_status.
-interface ClaudeAuthStatus {
-  connected: boolean;
-  needsReconnect: boolean;
-  email: string | null;
-  organizationId: string | null;
-}
-// Último status conhecido do login pelo navegador; usado nos avisos "sem credenciais".
-let claudeConnected = false;
-// Enquanto true, o auto-refresh não relê o status (não atropela o "Aguardando…").
-let claudeLoginInProgress = false;
-
-/// Reflete o status do login pelo navegador na UI (texto, botões) e nos avisos.
-function applyClaudeAuthStatus(st: ClaudeAuthStatus): void {
-  // Sessão que precisa reconectar conta como "sem credenciais" nos avisos.
-  claudeConnected = !!st.connected && !st.needsReconnect;
-  const statusEl = $("set-claudeAuthStatus");
-  const loginBtn = $("set-claudeLogin") as HTMLElement;
-  const logoutBtn = $("set-claudeLogout") as HTMLElement;
-  statusEl.classList.remove("ok", "warn");
-  if (st.connected && !st.needsReconnect) {
-    statusEl.textContent = st.email ? `Conectado como ${st.email}.` : "Conectado.";
-    statusEl.classList.add("ok");
-    loginBtn.hidden = true;
-    logoutBtn.hidden = false;
-  } else if (st.connected && st.needsReconnect) {
-    statusEl.textContent = "Sessão expirada. Reconecte sua conta para continuar a coleta.";
-    statusEl.classList.add("warn");
-    loginBtn.hidden = false;
-    loginBtn.textContent = "Reconectar";
-    logoutBtn.hidden = false;
-  } else {
-    statusEl.textContent = "Conecte sua conta para iniciar a coleta.";
-    loginBtn.hidden = false;
-    loginBtn.textContent = "Conectar com o navegador";
-    logoutBtn.hidden = true;
-  }
-  syncProviderHints();
-}
-
-async function loadClaudeAuthStatus(): Promise<void> {
-  try {
-    applyClaudeAuthStatus(await invoke<ClaudeAuthStatus>("claude_auth_status"));
-  } catch {
-    // transitório; mantém o estado atual
-  }
-}
-
-/// Dispara o login pelo navegador (abre a claude.ai; o backend captura o cookie).
-/// Enquanto aguarda, esconde "Conectar" e mostra "Cancelar". Se a conta tiver mais
-/// de uma org, a escolha acontece na própria janela de login (claude-org.html) e o
-/// comando só volta depois dela, já com o status gravado.
-async function claudeLogin(): Promise<void> {
-  const btn = $("set-claudeLogin") as HTMLElement;
-  const cancelBtn = $("set-claudeLoginCancel") as HTMLElement;
-  btn.hidden = true;
-  cancelBtn.hidden = false;
-  claudeLoginInProgress = true;
-  $("set-claudeAuthStatus").textContent = "Aguardando o login no navegador…";
-  try {
-    applyClaudeAuthStatus(await invoke<ClaudeAuthStatus>("claude_login"));
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!/cancel/i.test(msg)) setMsg("Falha no login do Claude: " + msg, "err");
-    await loadClaudeAuthStatus();
-  } finally {
-    claudeLoginInProgress = false;
-    cancelBtn.hidden = true;
-  }
-}
-
-async function claudeLoginCancel(): Promise<void> {
-  try {
-    await invoke("claude_login_cancel");
-  } catch {
-    // best-effort; o login pendente ainda expira sozinho no timeout
-  }
-}
-
-async function claudeLogout(): Promise<void> {
-  try {
-    await invoke("claude_logout");
-    applyClaudeAuthStatus({ connected: false, needsReconnect: false, email: null, organizationId: null });
-  } catch (e) {
-    setMsg("Falha ao desconectar: " + (e instanceof Error ? e.message : String(e)), "err");
-  }
+  });
+  // Controles das contas nas abas Widget (switch), Barra e Envio (radio): vão para o
+  // contas.json, à parte do auto-save do formulário (que só cuida do config.json).
+  const nome = PROVEDORES[p].nome;
+  const naLista = (idLista: string, grava: (chave: string, input: HTMLInputElement) => void): void => {
+    $(idLista).addEventListener("change", (e) => {
+      const input = e.target as HTMLInputElement;
+      const chave = input.dataset.conta;
+      if (!chave) return;
+      e.stopPropagation();
+      grava(chave, input);
+    });
+  };
+  naLista(`set-wdg${nome}Contas`, (chave, input) =>
+    void salvarContaDaAba(p, "set_conta_widget", { conta: chave, mostra: input.checked }, "Falha ao salvar a conta do widget"));
+  naLista(`set-barra${nome}Contas`, (chave, input) => {
+    if (input.checked) void salvarContaDaAba(p, "set_conta_barra", { conta: chave }, "Falha ao escolher a conta da barra");
+  });
+  naLista(`set-envio${nome}Contas`, (chave, input) => {
+    if (input.checked) void salvarContaDaAba(p, "set_conta_enviada", { conta: chave }, "Falha ao escolher a conta enviada");
+  });
+  // O apelido é gravado à parte do auto-save do formulário (que só cuida do
+  // config.json): stopPropagation evita o save_settings geral.
+  lista.addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    if (!input.matches(".conta-apelido")) return;
+    e.stopPropagation();
+    const chave = input.closest<HTMLElement>(".conta")?.dataset.conta;
+    if (chave) void salvarApelido(p, chave, input.value);
+  });
 }
 
 export async function loadSettings(): Promise<void> {
@@ -551,8 +743,8 @@ export async function loadSettings(): Promise<void> {
     const data = await invoke<SettingsData>("get_settings");
     fillForm(data);
     void loadEnvioToggles();
-    void loadCodexAuthStatus();
-    void loadClaudeAuthStatus();
+    void loadContas("codex");
+    void loadContas("claude");
     $("settings-loading").hidden = true;
     $("settings-form").hidden = false;
   } catch (e) {
@@ -631,9 +823,9 @@ function syncProviderHints(): void {
 /// o bloco `providers` inteiro, então omitir o campo apagaria o valor do disco.
 let claudeSessaoAutoCliPath = "";
 
-/// Último status conhecido da reabertura automática. Só chega no `get_settings`
-/// (o backend guarda em memória), então é preservado entre os `sync` disparados
-/// pelo próprio toggle.
+/// Último status conhecido da reabertura automática. Chega no `get_settings` e na
+/// releitura de 5s (`get_sessao_auto_status`), então é preservado entre os `sync`
+/// disparados pelo próprio toggle.
 let lastSessaoAutoStatus: SessaoAutoStatus | undefined;
 
 /// Horários do modo agendado ("HH:MM", ordenados). Fonte da verdade da lista
@@ -718,6 +910,16 @@ function sessaoAutoModoDesc(): string {
 /// Mostra o resultado da última tentativa abaixo do toggle — é onde o usuário
 /// descobre que o CLI não está instalado ou que o login dele expirou — e revela
 /// as opções de modo/horários só quando a reabertura está ligada.
+/// Relê o status da reabertura automática (última tentativa e conta vigiada) sem
+/// recarregar o formulário inteiro.
+async function loadSessaoAutoStatus(): Promise<void> {
+  try {
+    syncSessaoAuto(await invoke<SessaoAutoStatus>("get_sessao_auto_status"));
+  } catch {
+    // transitório; mantém o último status
+  }
+}
+
 function syncSessaoAuto(status?: SessaoAutoStatus): void {
   if (status !== undefined) lastSessaoAutoStatus = status;
 
@@ -731,8 +933,23 @@ function syncSessaoAuto(status?: SessaoAutoStatus): void {
     !(ligado && agendado && claudeSessaoAutoHorarios.length === 0);
   $("set-claudeSessaoAutoModoDesc").textContent = sessaoAutoModoDesc();
 
-  const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
   const st = lastSessaoAutoStatus;
+  // Qual conta decide o disparo: a do login do CLI, que é onde o `claude -p` abre
+  // a janela. Sem ela, o aviso diz por que a reabertura está parada.
+  const conta = $("set-claudeSessaoAutoConta") as HTMLElement;
+  conta.classList.toggle("warn", !!st?.aviso);
+  if (st?.aviso) {
+    conta.textContent = st.aviso;
+  } else if (st?.contaVigiada) {
+    conta.textContent = st.contaDoCli
+      ? `Vigiando a conta ${st.contaVigiada}, a mesma em que o CLI está logado.`
+      : `Vigiando a conta ${st.contaVigiada}.`;
+  } else {
+    conta.textContent = "";
+  }
+  conta.hidden = conta.textContent === "";
+
+  const el = $("set-claudeSessaoAutoStatus") as HTMLElement;
   if (!st?.ultimaTentativaEm) {
     el.hidden = true;
     el.textContent = "";
@@ -773,9 +990,9 @@ function setNotes(ids: string[], msg: string): void {
 }
 function syncProviderNotes(): void {
   const codexOn = $<HTMLInputElement>("set-codexHab").checked;
-  const codexCfg = codexConnected;
+  const codexCfg = temContaAtiva("codex");
   const claudeOn = $<HTMLInputElement>("set-claudeHab").checked;
-  const claudeCfg = claudeConnected;
+  const claudeCfg = temContaAtiva("claude");
   setNotes(["envio-codex-note"], providerNote(codexOn, codexCfg));
   setNotes(["envio-claude-note"], providerNote(claudeOn, claudeCfg));
   setNotes(["barra-codex-note", "wdg-codex-note"], providerNote(codexOn, codexCfg));
@@ -824,11 +1041,17 @@ export function initSettings(): void {
   $("set-srvHab").addEventListener("change", syncServerPinHint);
   $("set-srvPin").addEventListener("input", syncServerPinHint);
   $("set-codexHab").addEventListener("change", syncProviderHints);
-  $("set-codexLogin").addEventListener("click", () => void codexLogin());
-  $("set-codexLoginCancel").addEventListener("click", () => void codexLoginCancel());
-  $("set-codexLogout").addEventListener("click", () => void codexLogout());
+  for (const id of ["set-wdgClaude", "set-wdgCodex", "set-claudeTaskbar", "set-codexTaskbar", "set-claudeEnviar", "set-codexEnviar"]) {
+    $(id).addEventListener("change", syncCartoes);
+  }
+  wireContas("codex");
   $("set-claudeHab").addEventListener("change", syncProviderHints);
-  $("set-claudeSessaoAuto").addEventListener("change", () => syncSessaoAuto());
+  wireContas("claude");
+  // Ao ligar, já mostra a conta vigiada, sem esperar a releitura de 5s.
+  $("set-claudeSessaoAuto").addEventListener("change", () => {
+    syncSessaoAuto();
+    void loadSessaoAutoStatus();
+  });
   $("set-claudeSessaoAutoModo").addEventListener("change", () => syncSessaoAuto());
   $("set-claudeSessaoAutoAdd").addEventListener("click", addSessaoAutoHorario);
   // Enter no campo de hora adiciona, em vez de nada acontecer.
@@ -840,9 +1063,6 @@ export function initSettings(): void {
   // Escolher uma hora no campo não muda o config (só entra na lista pelo
   // "Adicionar"), então o "change" dele não deve chegar ao auto-save.
   $("set-claudeSessaoAutoHora").addEventListener("change", (e) => e.stopPropagation());
-  $("set-claudeLogin").addEventListener("click", () => void claudeLogin());
-  $("set-claudeLoginCancel").addEventListener("click", () => void claudeLoginCancel());
-  $("set-claudeLogout").addEventListener("click", () => void claudeLogout());
   $("set-barraCor").addEventListener("input", syncColorPicker);
   $("set-barraCorPicker").addEventListener("input", () => {
     $<HTMLInputElement>("set-barraCor").value = $<HTMLInputElement>("set-barraCorPicker").value;
@@ -873,16 +1093,19 @@ export function initSettings(): void {
   // código (fillForm, picker de cor/fundo) não dispara "change", logo não há laço.
   $("settings-form").addEventListener("change", () => scheduleAutoSave());
 
-  // Auto-refresh do status do login pelo navegador: enquanto a tela Configurações
-  // está visível, relê o status a cada 5s para refletir mudanças externas (ex.:
-  // sessão/token expirou e a coleta marcou "Reconectar"). Só relê o status
-  // (texto/botões), sem tocar nos campos; pula durante um login em andamento. A
-  // janela é destruída ao fechar, então o timer não vaza entre reaberturas.
+  // Auto-refresh das contas: enquanto a tela Configurações está visível, relê a
+  // lista a cada 5s para refletir mudanças externas (ex.: sessão/token expirou e a
+  // coleta marcou "Reconectar"). Só redesenha a lista quando ela muda, sem tocar
+  // nos campos; pula durante um login em andamento. A janela é destruída ao
+  // fechar, então o timer não vaza entre reaberturas.
   window.setInterval(() => {
     const visivel = document.getElementById("view-settings")?.classList.contains("on");
     if (!visivel) return;
-    if (!codexLoginInProgress) void loadCodexAuthStatus();
-    if (!claudeLoginInProgress) void loadClaudeAuthStatus();
+    for (const p of ["codex", "claude"] as const) {
+      if (!PROVEDORES[p].loginEmAndamento) void loadContas(p);
+    }
+    // A conta do CLI muda por fora (`claude /login`): relê a conta vigiada.
+    if ($<HTMLInputElement>("set-claudeSessaoAuto").checked) void loadSessaoAutoStatus();
   }, 5000);
 
   void loadSettings();

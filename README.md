@@ -13,6 +13,8 @@ O projeto foi feito com:
 - Inicia no tray sem abrir janela principal para o usuário
 - Tem uma janela nativa (webview) com **Envio de dados**, **Uso atual**, **Dashboard Claude**, **Dashboard Codex**, **Configurações** e **Sobre** (versão, atualização e novidades)
 - Coleta uso do Codex e do Claude em intervalo configurável
+- Aceita **até duas contas por provedor** (ex.: trabalho e pessoal), cada uma com
+  seu apelido
 - Envia logs estruturados JSON para Loki
 - Mantém logs locais
 - Mostra status resumido no tray
@@ -57,6 +59,14 @@ Linux:
 
 - Config: `~/.config/ai-usage-tray-agent/config.json`
 - Logs: `~/.local/state/ai-usage-tray-agent/logs/`
+
+Contas: o login de cada provedor fica em arquivos do próprio app, na mesma pasta do
+`config.json`. A conta **principal** fica em `claude-auth.json` / `codex-auth.json`, e a
+segunda conta de cada provedor em `contas/claude/` / `contas/codex/`. As preferências por
+conta (apelido, ordem dos cards, o que aparece no widget, a conta da barra e a conta
+enviada ao Loki) ficam em `contas.json`. O `config.json` não muda de formato por causa das
+contas: uma versão anterior do app continua funcionando e enxerga só a principal de cada
+provedor.
 
 Exemplo:
 
@@ -145,6 +155,10 @@ Payload interno:
 
 O timestamp do Loki é enviado em nanossegundos no campo `values`.
 
+Vai **uma conta por provedor** (um stream por provedor): a escolhida na aba **Envio** das
+Configurações ou, sem escolha, a principal. Uma conta sem limites de uso (ex.: Claude no
+plano gratuito, cuja API não traz nenhuma janela) não é enviada.
+
 ## Tray (ícone na bandeja)
 
 - **Clique esquerdo** no ícone: abre a janela do app (Dashboard/Configurações).
@@ -181,7 +195,8 @@ e na barra mesmo com o envio pausado/desabilitado. Traz:
   automático (mesmo padrão do "Atualizado há…" do "Uso atual"); some quando o
   envio está pausado ou sem provedor ativo.
 - **Estado atual** com um indicador "ao vivo" (ponto pulsante quando ativo) e o
-  **status de envio de cada provedor** (Claude/Codex: ativado/desativado). Quando
+  **status de envio de cada provedor** (Claude/Codex: ativado/desativado; com duas
+  contas no provedor, também qual delas está sendo enviada). Quando
   **nenhum** provedor está com "Enviar ao Loki" ativado, o indicador troca para
   **"Nenhum provedor enviando"** (em vez de "Envio ativo") e o histórico exibe um
   lembrete para ativar Claude ou Codex em Configurações.
@@ -195,7 +210,9 @@ e na barra mesmo com o envio pausado/desabilitado. Traz:
   tooltip da linha. Botão **Limpar** zera a lista.
 
 O liga/desliga do envio **por provedor** (`envio.claude`, `envio.codex`) fica nas
-**Configurações**, na aba **Envio** (opção "Enviar ao Loki" por provedor). Tudo em
+**Configurações**, na aba **Envio** (opção "Enviar ao Loki" por provedor), junto com a
+escolha da **conta enviada** quando o provedor tem duas (`set_conta_enviada`, gravada no
+`contas.json`). Tudo em
 `envio` é **persistido no `config.json`**; a pausa geral é gerenciada por esta
 tela e o painel de **Configurações** preserva esse bloco (editar configurações
 não reativa o envio nem tira a pausa). O histórico tem altura limitada e **rola
@@ -206,7 +223,8 @@ Os dados vêm do comando `get_envio_state`; as ações usam `set_envio_paused`,
 
 ### Uso atual
 
-Mostra, para **Claude** e **Codex**, o uso da **sessão
+Um card por provedor (**Claude** e **Codex**), com o apelido da conta (senão o e-mail)
+do lado oposto ao nome. Cada card mostra o uso da **sessão
 (5h)** e **semanal (7d)** com barra de progresso, tempo restante para o reset
 (contagem regressiva ao vivo) e o horário/data exatos do próximo reset — os dois
 numa linha só, separados por um ponto, com o que não couber cortado por
@@ -215,8 +233,17 @@ reset cai num desses dias (a conta é por virada de meia-noite, não por 24h). O
 subtítulo da página traz o **"Atualizado há Xs"** do dado em cache (sobe ao vivo
 e zera a cada nova coleta). Se um provedor informa só uma das janelas (ex.: o
 Codex só com o semanal), o bloco vazio é omitido e a outra ocupa o card inteiro.
+Com as duas janelas, elas dividem um container só, com um divisor no meio. Uma conta
+sem limites de uso (ex.: Claude gratuito) mostra "Sem limites de uso para acompanhar".
 Os dados vêm do comando `get_usage` (lê o mesmo
 snapshot do tray/barra, sem rede).
+
+Com **duas contas** no provedor, o card mostra uma completa e a outra **resumida** numa
+coluna estreita ao lado (no formato de anéis do widget: a % de cada janela e, com o
+gráfico ligado, o tempo até o reset). Ao abrir, a principal fica completa, à esquerda. As
+setas **‹ Apelido ›** do cabeçalho alternam: a coluna do resumo cresce até a conta
+completa e a outra encolhe até virar resumo, com animação. Uma conta com erro fica num
+container próprio, com a mensagem em vermelho.
 
 Abaixo de cada janela há um **mini gráfico de linha** com a evolução da
 porcentagem de uso ao longo das **últimas ~5 horas** (passe o mouse para ver o
@@ -234,11 +261,10 @@ No cabeçalho da página, uma pílula reúne dois controles:
   `providers`/`usoAtual.grafico` no `config.json` (gravado pelo comando
   `set_usage_chart`, fora do auto-save das Configurações).
 - **Reordenar**: entra no modo de reordenação — os cards ganham uma alça e ficam
-  **arrastáveis**; arraste um sobre o outro para trocar a ordem. A ordem é uma
-  **única configuração** (`providers.ordem` no `config.json`, via
-  `set_providers_order`) que vale também para o **widget** e a **barra de tarefas**.
-  É normalizada para conter exatamente os provedores conhecidos, então novos
-  provedores entram no fim automaticamente.
+  **arrastáveis**; arraste um sobre o outro para trocar a ordem (cada provedor leva as
+  contas dele junto). A ordem é gravada no `contas.json` e espelhada em
+  `providers.ordem` do `config.json` (via `set_contas_ordem`), e vale também para o
+  **widget** e a **barra de tarefas**.
 
 Os dados vêm do comando `get_usage` (lê o mesmo snapshot do tray/barra, sem rede).
 
@@ -255,15 +281,20 @@ mais caracteres, e o nome completo fica no tooltip. Há um seletor de período *
 **personalizado** (intervalo de datas, limitado ao período com dados); o padrão é
 **30d**. As abas Ferramentas e Projetos dependem dos transcripts vivos (~30 dias),
 então só enxergam esse período. Os dados vêm do comando `get_stats` e são
-recarregados ao reabrir a janela.
+recarregados ao reabrir a janela. São os dados do Claude Code **nesta máquina, de todas
+as contas** (o subtítulo da tela diz isso): os arquivos locais não registram de qual
+conta veio cada mensagem.
 
 ### Dashboard Codex
 
 Mostra o **histórico diário de uso do Codex** (em % da cota), no mesmo estilo da
 Dashboard Claude. Os dados vêm de uma chamada à API de analytics do backend do
 ChatGPT (`/backend-api/wham/usage/daily-token-usage-breakdown`) usando o mesmo
-`access_token` do `auth.json` da coleta — por isso a tela tem latência de rede e
-carrega ao abrir (e ao trocar o período). Traz:
+`access_token` da coleta, da conta escolhida — por isso a tela tem latência de rede e
+carrega ao abrir (e ao trocar o período ou a conta). Traz:
+
+- **Seletor de conta** no cabeçalho, com duas contas do Codex: mostra o apelido e, no
+  menu, cada conta com o e-mail embaixo. Por padrão, a principal.
 
 - **Cards de resumo**: dias ativos, uso médio/dia, dia de pico, maior uso, origem
   e modelo predominantes.
@@ -277,7 +308,8 @@ carrega ao abrir (e ao trocar o período). Traz:
   no período.
 
 Os dados vêm do comando `get_codex_stats` (que faz a chamada de rede no backend
-Rust). A unidade é percentual de uso diário (não tokens absolutos).
+Rust e devolve também as contas do seletor). A unidade é percentual de uso diário (não
+tokens absolutos).
 
 ### Configurações
 
@@ -288,15 +320,23 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
   autostart não fica no `config.json`, é gerenciado pelo `tauri-plugin-autostart`.
 - **Envio**: `usuario` (Nome de exibição), `loki.url` e o **Enviar ao Loki** por
   provedor (`envio.codex`, `envio.claude`, como interruptores) — avisa quando o
-  provedor está desativado ou sem credenciais, mas o interruptor segue operável.
-- **Codex**: `habilitado` (interruptor de destaque com o logo) e o **login pelo
-  navegador** (OAuth: um botão abre o navegador para você entrar na conta
-  ChatGPT/OpenAI; os tokens ficam salvos no próprio app, em `codex-auth.json`, e são
-  renovados sozinhos).
-- **Claude**: `habilitado` (interruptor de destaque com o logo) e o **login pelo
-  navegador** (um botão abre a claude.ai para você entrar; a sessão e o Organization
-  ID são capturados e salvos no app — em `claude-auth.json` — com aviso para
-  reconectar quando a sessão expira). Se a conta
+  provedor está desativado ou sem credenciais, mas o interruptor segue operável. Com
+  duas contas no provedor, o cartão dele lista as contas para escolher **qual é
+  enviada** (padrão: a principal).
+- **Codex** e **Claude**: `habilitado` (interruptor de destaque com o logo) e a **lista
+  de contas**, com até duas por provedor. Cada conta tem apelido (até 20 caracteres),
+  status e os botões **Tornar principal**, **Reconectar** e **Remover** (este pede um
+  segundo clique, em vermelho). **Adicionar conta** faz um novo login pelo navegador, e
+  logo depois do login de uma conta nova um modal oferece o apelido (opcional).
+  Reconectar a mesma conta atualiza a existente, sem duplicar. A **principal** é a que as
+  telas mostram primeiro, a padrão da barra e do envio, e a única que uma versão anterior
+  do app enxerga.
+- **Codex**, login: OAuth pelo navegador (você entra na conta ChatGPT/OpenAI; os tokens
+  ficam salvos no próprio app e são renovados sozinhos). Com uma conta já conectada, o
+  login pede a tela de entrada da OpenAI, para você poder entrar com outra.
+- **Claude**, login: um botão abre a claude.ai para você entrar (inclusive com Google); a
+  sessão e o Organization ID são capturados e salvos no app, com aviso para
+  reconectar quando a sessão expira. Se a conta
   tiver mais de uma organização, a própria janela de login mostra um modal para
   escolher qual usar (com o uso atual de cada uma), pois a coleta é por organização. Os campos ficam esmaecidos
   quando o provedor está desativado. Traz ainda a **Reabertura automática de sessão**
@@ -304,12 +344,16 @@ Formulário com **abas** que cobre **todas as opções do `config.json`** (mais 
 - **Barra de tarefas** (Windows): exibir cada provedor na barra
   (`providers.<ia>.mostraNaTaskbarWindows`), `lado`, `deslocamento`,
   `tamanhoFonte`, `corFonte` (com seletor de cor), `formatoReset` (tempo
-  restante ou hora/data exata) e `janelas` (quais janelas exibir).
+  restante ou hora/data exata) e `janelas` (quais janelas exibir). A barra mostra
+  **uma conta por provedor**: com duas, o cartão do provedor lista as contas para
+  escolher qual (padrão: a principal).
 - **Widget**: exibe o widget da área de trabalho — aparece quando ao menos um
   provedor está marcado (`mostraClaude`/`mostraCodex`) — e configura o que ele
   mostra: `sempreNaFrente`, `modo` (Completo, Mínimo ou Anel duplo, escolhido por
   miniaturas), `janelas`, `formatoReset` (tempo restante, hora/data exata ou
   nenhum), imagem/gif de `fundo` (com seletor de arquivo) e `opacidade` do painel.
+  Com duas contas no provedor, o cartão dele ganha um interruptor por conta, para
+  escolher quais aparecem no widget.
 - **Servidor**: liga o **servidor HTTP dos dashboards** (ver seção abaixo) —
   `habilitado`, `host` (apenas local `127.0.0.1` ou rede `0.0.0.0`), `porta` e
   `pin` de acesso obrigatório (com mostrar/ocultar).
@@ -367,6 +411,12 @@ Como funciona:
 
 - A cada coleta, se o Claude responder que **não há janela ativa**, o app dispara
   `claude -p "Oi"`. A mensagem é fixa; o objetivo é só carimbar o início da janela.
+- A janela vigiada é a da **conta em que o CLI está logado** (lida do `.claude.json`
+  do CLI: organização + e-mail), e não necessariamente a principal do app: é nessa
+  conta que o `claude -p` abre a sessão. A seção mostra qual conta está sendo
+  vigiada. Se o CLI estiver numa conta que não está conectada no app, **não dispara**
+  e avisa (disparar ali abriria a janela de outra conta, gastando cota à toa); se não
+  der para ler a conta do CLI, usa a única conta do app ou, com duas, não dispara.
 - Só age sobre uma coleta **bem-sucedida** que diga isso explicitamente. Erro de
   coleta ou sessão expirada **não** contam como "janela fechada" — do contrário o
   app gastaria cota à toa, possivelmente em looping.
@@ -438,6 +488,8 @@ No Windows o app desenha o uso diretamente na barra de tarefas. Cada provedor
   pelas **Configurações** do app ou editando o `config.json` direto; nos dois
   casos vale em ~1s. Só aparece na barra quando `habilitado` **e**
   `mostraNaTaskbarWindows` forem `true`.
+- A barra mostra **uma conta por provedor**: com duas, a escolhida na aba Barra das
+  Configurações (gravada no `contas.json`); sem escolha, a principal.
 - Em Linux/macOS o campo `mostraNaTaskbarWindows` é lido mas **ignorado**: o
   widget da barra de tarefas só existe no Windows. O campo é mantido no arquivo
   para que a mesma `config.json` seja portável entre sistemas.
@@ -508,14 +560,21 @@ Configurações (ou por `widget.habilitado` no `config.json`) e aplicado em ~1s,
 sem reiniciar.
 
 - **Conteúdo**: `mostraClaude`/`mostraCodex` escolhem quais provedores aparecem
-  (além de o provedor estar `habilitado`); `janelas` e `formatoReset` funcionam
-  igual aos da barra (sessão/semanal e tempo restante vs. hora/data exata),
-  com a opção extra `"nenhum"` no `formatoReset` que oculta o reset.
+  (além de o provedor estar `habilitado`) e, com duas contas no provedor, um
+  interruptor por conta na aba Widget escolhe quais delas aparecem; `janelas` e
+  `formatoReset` funcionam igual aos da barra (sessão/semanal e tempo restante vs.
+  hora/data exata), com a opção extra `"nenhum"` no `formatoReset` que oculta o reset.
 - **Modo de exibição** (`modo`): como cada provedor aparece — `"completo"`
-  (padrão; cards com barras), `"minimo"` (uma linha por provedor: ícone, nome e
+  (padrão; cards com barras), `"minimo"` (uma linha por conta: o ícone do provedor e
   as porcentagens) ou `"anelduplo"` (anéis de progresso concêntricos, sessão no
   anel externo e semanal no interno; com uma janela só, desenha apenas o anel
   interno e encolhe).
+- **Duas contas**: no mínimo, as linhas se agrupam em **Principal** e **Secundário**.
+  No completo e no anel duplo, o card mostra uma conta por vez (a principal ao abrir):
+  com o mouse sobre ele aparece o botão **⇄**, que alterna a conta com animação, e
+  abaixo do card ficam os pontinhos e o apelido da conta na tela. O resto do card
+  continua servindo para arrastar o widget. Uma conta com erro mantém a altura do
+  card normal.
 - **Posição e tamanho**: arraste a janela para reposicionar e redimensione pelas
   bordas; a posição e o tamanho são lembrados entre execuções. Na primeira vez o
   widget ajusta a altura ao conteúdo.
@@ -658,14 +717,13 @@ Linux:
 Claude:
 
 - A autenticação é pelo **login pelo navegador**, que captura a sessão e o
-  Organization ID e os salva no app (`claude-auth.json`). Como o uso é medido **por organização**, se a conta tiver
+  Organization ID e os salva no app. Como o uso é medido **por organização**, se a conta tiver
   mais de uma a janela de login pede para escolher qual usar (mostrando o uso de cada uma) em vez
   de adivinhar — evita coletar da organização errada e reportar 0%
 - A sessão web **expira** e **não há renovação automática** (não existe refresh
   token): quando expira, a coleta recebe 401/403 e o app pede para **reconectar**
-- O login pelo navegador abre a `claude.ai` numa janela do app e lê o cookie de
-  sessão; login por SSO/Google pode não funcionar dentro dela — nesse caso use o
-  login por e-mail/código
+- Uma conta no plano gratuito não tem janelas de limite na API: aparece como "Sem
+  limites de uso para acompanhar" e não é enviada ao Loki
 - A **reabertura automática de sessão** depende do Claude Code CLI instalado e
   logado com a assinatura; sem ele a opção fica sem efeito e a falha aparece na
   aba Claude das Configurações
@@ -677,7 +735,10 @@ Claude:
 Codex:
 
 - A autenticação é pelo **login pelo navegador** (OAuth), que salva e renova os
-  tokens no próprio app (`codex-auth.json`)
+  tokens no próprio app
+- Para conectar uma **segunda conta**, o login pede a tela de entrada da OpenAI; se o
+  navegador ainda assim entrar direto na conta já conectada, saia dela no navegador
+  (ou use uma janela anônima) e tente de novo
 - O login pelo navegador abre a porta local `1455` para receber o retorno do OAuth
   (mesma porta usada pelo Codex CLI); deixe-a livre durante a conexão
 
@@ -696,6 +757,7 @@ src/
   tabs.ts             # pilula deslizante das barras de abas (um fundo por barra, que anda ate a aba clicada)
   envio.ts            # tela "Envio de dados" (pausa/envio por provedor, historico)
   usage.ts            # tela "Uso atual" (consome get_usage; rebusca sozinha, sem botão manual)
+  usage-sim.ts        # so' no `tauri dev`: cenarios simulados de contas para avaliar o layout do "Uso atual"
   usage-format.ts     # helpers de formatacao/icones compartilhados (uso, reset, cores)
   dashboard.ts        # dashboard de uso do Claude Code (consome get_stats)
   codex-dashboard.ts  # dashboard de uso do Codex (consome get_codex_stats)
@@ -708,7 +770,8 @@ src/
   claude-org.ts       # escolha da org do Claude na janela de login (claude_login_orgs/claude_select_org)
   settings.ts         # configuracoes com abas e auto-save (consome get_settings/save_settings)
   widget.ts           # widget da area de trabalho (consome get_widget_state)
-  widget-modos.ts     # modos de exibicao do widget: "minimo" e "anelduplo"
+  widget-modos.ts     # modos de exibicao do widget ("minimo", "anelduplo") e pecas das varias contas
+  vite-env.d.ts       # tipos do Vite (import.meta.env)
   styles.css
 
 src-tauri/
@@ -722,8 +785,10 @@ src-tauri/
     main.rs
     usage_dashboard.rs # coleta as estatisticas do dashboard (Claude, arquivos locais)
     codex_dashboard.rs # historico diario de uso do Codex (API wham, get_codex_stats)
-    codex_auth.rs      # login do Codex pelo navegador (OAuth+PKCE) e refresh dos tokens (codex-auth.json)
-    claude_auth.rs     # login do Claude pelo navegador (captura o sessionKey do webview) e org (claude-auth.json)
+    contas.rs          # varias contas por provedor: arquivos (principal no legado, extras em contas/),
+                       # preferencias em contas.json, principal/remocao e dedupe por identidade
+    codex_auth.rs      # login do Codex pelo navegador (OAuth+PKCE) e refresh dos tokens
+    claude_auth.rs     # login do Claude pelo navegador (captura o sessionKey do webview) e org
     http_server.rs     # servidor HTTP opcional: serve os dashboards no navegador com PIN (somente leitura)
     taskbar_widget.rs  # widget da barra de tarefas (somente Windows)
   tauri.conf.json

@@ -12,6 +12,8 @@ import {
   ICON_CLAUDE,
   iconCodex,
   pctText,
+  SEM_LIMITES,
+  TEXTO_SEM_LIMITES,
   type ProviderUsage,
 } from "./usage-format";
 
@@ -37,7 +39,40 @@ export function resetInline(resetIso: string | null | undefined, mode: ResetMode
 }
 
 // ----------------------------------------------------------------------------
-// Modo "minimo": uma linha por provedor — ícone + nome + % por janela (sem
+// Várias contas no mesmo provedor (modos "completo" e "anelduplo"): o card mostra
+// uma conta por vez. Com mais de uma conta visível, ganha o botão ⇄ que alterna a
+// conta (aparece com o mouse sobre o card; ver widget.ts) e, logo abaixo dele, a
+// linha com os pontinhos e o rótulo da conta na tela.
+// ----------------------------------------------------------------------------
+export interface AlternaConta {
+  provedor: string;
+  /// Posição da conta na tela entre as visíveis do provedor (a 1ª é a principal).
+  indice: number;
+  total: number;
+  /// Apelido, senão o e-mail, da conta na tela.
+  rotulo: string;
+}
+
+/// Botão ⇄ que alterna a conta. Duas setas em sentidos opostos: "trocar entre as
+/// contas", sem sugerir um sentido (uma seta só para a direita confundia quando a
+/// bolinha voltava). É o único ponto do card que recebe o mouse.
+export function botaoTroca(alterna: AlternaConta | undefined): string {
+  if (!alterna) return "";
+  return `<button type="button" class="wtroca" data-provedor="${escapeHtml(alterna.provedor)}" aria-label="Alternar a conta" title="Alternar a conta">` +
+    `<svg viewBox="0 0 12 12" width="13" height="13" aria-hidden="true"><path d="M2 4h8M8 2l2 2-2 2M10 8H2M4 6 2 8l2 2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`;
+}
+
+/// Linha logo abaixo do card (FORA dele): pontinhos (qual das contas está na tela)
+/// e o rótulo da conta atual, com reticências se não couber.
+export function linhaConta(alterna: AlternaConta | undefined): string {
+  if (!alterna) return "";
+  const lista = Array.from({ length: alterna.total }, (_, i) => `<i${i === alterna.indice ? ' class="on"' : ""}></i>`).join("");
+  return `<div class="wconta"><span class="wconta-pontos" aria-hidden="true">${lista}</span>` +
+    `<span class="wconta-apelido">${escapeHtml(alterna.rotulo)}</span></div>`;
+}
+
+// ----------------------------------------------------------------------------
+// Modo "minimo": uma linha por conta — ícone do provedor + % por janela (sem
 // rótulos 5h/7d), com o reset entre parênteses após cada % (some no "nenhum").
 // ----------------------------------------------------------------------------
 function minWindow(
@@ -61,10 +96,12 @@ export function renderProviderMinimo(
   mode: ResetMode,
 ): string | null {
   if (!mostra || !prov.habilitado) return null;
-  const icon = label === "Codex" ? iconCodex() : ICON_CLAUDE;
-  const head = `${icon}<span class="wprov-name">${label}</span>`;
+  // Só o ícone, sem o nome do provedor: o ícone já o identifica (como no anel duplo),
+  // e a linha fica mais curta.
+  const head = label === "Codex" ? iconCodex() : ICON_CLAUDE;
   const m = prov.metric;
   if (!m) return `<div class="wprov wprov-min">${head}<span class="wprov-note">Coletando…</span></div>`;
+  if (m.status === SEM_LIMITES) return `<div class="wprov wprov-min">${head}<span class="wprov-note">${TEXTO_SEM_LIMITES}</span></div>`;
   if (m.status === "erro" || m.erro) {
     return `<div class="wprov wprov-min error">${head}<span class="wprov-note err">erro</span></div>`;
   }
@@ -100,15 +137,27 @@ export function renderProviderAnelDuplo(
   mostra: boolean,
   janelas: { sessao: boolean; semanal: boolean },
   mode: ResetMode,
+  alterna?: AlternaConta,
 ): string | null {
   if (!mostra || !prov.habilitado) return null;
   // Sem o nome do provedor: o ícone (spark do Claude / logo do Codex) já o
   // identifica, então a legenda fica só com os anéis e as porcentagens.
   const icon = label === "Codex" ? iconCodex() : ICON_CLAUDE;
   const m = prov.metric;
-  if (!m) return `<div class="wprov wprov-duplo">${icon}<span class="wprov-note">Coletando…</span></div>`;
-  if (m.status === "erro" || m.erro) {
-    return `<div class="wprov wprov-duplo error">${icon}<span class="wprov-note err">erro</span></div>`;
+  const semLimites = m?.status === SEM_LIMITES;
+  if (!m || semLimites || m.status === "erro" || m.erro) {
+    const nota = !m
+      ? '<span class="wprov-note">Coletando…</span>'
+      : semLimites
+        ? `<span class="wprov-note">${TEXTO_SEM_LIMITES}</span>`
+        : '<span class="wprov-note err">erro</span>';
+    // O ícone numa caixa do tamanho dos anéis (sem desenhá-los, que pareceriam 0%):
+    // o card fica da mesma altura do normal, e alternar entre uma conta com erro e
+    // outra com dados não faz o widget pular. O tamanho segue as janelas escolhidas.
+    const lado = janelas.sessao && janelas.semanal ? 76 : 54;
+    return `<div class="wprov wprov-duplo${m && !semLimites ? " error" : ""}">` +
+      `<span class="wduplo-rings" style="width:${lado}px;height:${lado}px"><span class="wduplo-icon">${icon}</span></span>` +
+      `<span class="wduplo-info">${nota}</span>${botaoTroca(alterna)}</div>${linhaConta(alterna)}`;
   }
 
   // Janelas presentes, na ordem sessão → semanal (a ordem das linhas e a posição
@@ -130,9 +179,10 @@ export function renderProviderAnelDuplo(
   const bgCircles = wins
     .map((w) => `<circle cx="${c}" cy="${c}" r="${w.ring.r}" fill="none" stroke="rgba(0,0,0,.4)" stroke-width="6"/>`)
     .join("");
+  // `wduplo-arco`: o arco de progresso, que a troca de conta anima (widget.ts).
   const fgCircles = wins
     .map((w) =>
-      `<circle cx="${c}" cy="${c}" r="${w.ring.r}" fill="none" stroke="${barColor(w.pct)}" ` +
+      `<circle class="wduplo-arco" cx="${c}" cy="${c}" r="${w.ring.r}" fill="none" stroke="${barColor(w.pct)}" ` +
       `stroke-width="6" stroke-linecap="round" stroke-dasharray="${ringDash(w.pct, w.ring.circ)}"/>`)
     .join("");
 
@@ -157,6 +207,6 @@ export function renderProviderAnelDuplo(
 
   return `<div class="wprov wprov-duplo">
     ${svg}
-    <span class="wduplo-info">${legend}</span>
-  </div>`;
+    <span class="wduplo-info">${legend}</span>${botaoTroca(alterna)}
+  </div>${linhaConta(alterna)}`;
 }

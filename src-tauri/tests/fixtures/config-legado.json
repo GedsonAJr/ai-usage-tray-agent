@@ -1,0 +1,61 @@
+{
+  "usuario": "",
+  "intervaloSegundos": 10,
+  "loki": {
+    "url": ""
+  },
+  "providers": {
+    "codex": {
+      "habilitado": true,
+      "mostraNaTaskbarWindows": true
+    },
+    "claude": {
+      "habilitado": true,
+      "mostraNaTaskbarWindows": true,
+      "sessaoAuto": {
+        "habilitado": false,
+        "modo": "automatico",
+        "horarios": [],
+        "caminhoCli": ""
+      }
+    },
+    "ordem": [
+      "claude",
+      "codex"
+    ]
+  },
+  "barraTarefas": {
+    "lado": "direita",
+    "deslocamento": 0,
+    "tamanhoFonte": 9,
+    "corFonte": "auto",
+    "formatoReset": "restante",
+    "janelas": "ambos"
+  },
+  "widget": {
+    "habilitado": false,
+    "mostraClaude": true,
+    "mostraCodex": true,
+    "fundo": "",
+    "sempreNaFrente": true,
+    "opacidade": 90,
+    "janelas": "ambos",
+    "formatoReset": "restante",
+    "modo": "completo"
+  },
+  "envio": {
+    "pausado": false,
+    "claude": true,
+    "codex": true
+  },
+  "servidor": {
+    "habilitado": false,
+    "host": "127.0.0.1",
+    "porta": 8770,
+    "pin": ""
+  },
+  "usoAtual": {
+    "grafico": true,
+    "avisarAoDesligar": true
+  }
+}

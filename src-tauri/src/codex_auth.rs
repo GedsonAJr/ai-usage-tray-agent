@@ -3,11 +3,13 @@
 // 127.0.0.1:1455 para receber o callback, abre o navegador do sistema na tela de
 // login da OpenAI e troca o `authorization code` por tokens (access/refresh/id).
 //
-// Os tokens sao gravados em um arquivo PROPRIO do app (`codex-auth.json`, no
-// `config_dir`), no MESMO formato do `~/.codex/auth.json` — assim os leitores que
-// ja existem (coleta de uso em `lib.rs` e dashboard em `codex_dashboard.rs`)
-// funcionam sem alteracao, bastando apontar para este arquivo. NAO tocamos no
-// `~/.codex/auth.json` do usuario.
+// Os tokens sao gravados em arquivos PROPRIOS do app, no MESMO formato do
+// `~/.codex/auth.json` — assim os leitores que ja existem (coleta de uso em
+// `lib.rs` e dashboard em `codex_dashboard.rs`) funcionam sem alteracao, bastando
+// apontar para o arquivo. Cada conta tem o seu: a principal em `codex-auth.json` no
+// `config_dir`, as extras em `contas/codex/` (ver `contas.rs`); por isso as funcoes
+// recebem o caminho do arquivo da conta. NAO tocamos no `~/.codex/auth.json` do
+// usuario.
 //
 // O `access_token` expira; guardamos `expires_at` e o renovamos via `refresh_token`
 // em `ensure_fresh`, chamada antes de cada coleta no modo "navegador". O
@@ -103,7 +105,8 @@ struct AuthClaim {
     chatgpt_account_id: Option<String>,
 }
 
-/// Caminho do arquivo gerenciado de credenciais do Codex (login pelo navegador).
+/// Arquivo legado de credenciais do Codex, que guarda a conta principal (e e' o
+/// unico que versoes anteriores do app conhecem).
 pub fn auth_file(config_dir: &Path) -> PathBuf {
     config_dir.join("codex-auth.json")
 }
@@ -410,13 +413,25 @@ fn read_stored(path: &Path) -> Option<StoredAuth> {
 }
 
 fn write_stored(path: &Path, auth: &StoredAuth) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("Falha ao criar diretório de credenciais: {error}"))?;
-    }
     let payload = serde_json::to_string_pretty(auth).map_err(|error| error.to_string())?;
-    std::fs::write(path, format!("{payload}\n"))
-        .map_err(|error| format!("Falha ao gravar codex-auth.json: {error}"))
+    crate::contas::gravar_atomico(path, &format!("{payload}\n"))
+}
+
+/// Identidade de uma conta (base do id dela em `contas`): o workspace
+/// (`account_id`) e o e-mail, os dois vindos das claims do `id_token`. Normalizada
+/// para que a mesma conta, reconectada, caia na mesma chave.
+fn identity_of(auth: &StoredAuth) -> String {
+    format!(
+        "{}|{}",
+        auth.tokens.account_id.as_deref().unwrap_or("").trim(),
+        auth.email.as_deref().unwrap_or("").trim().to_lowercase()
+    )
+}
+
+/// Identidade e e-mail da conta gravada em `path`, ou `None` se nao ha' login valido.
+pub fn identity(path: &Path) -> Option<(String, Option<String>)> {
+    let auth = read_stored(path).filter(has_access_token)?;
+    Some((identity_of(&auth), auth.email.clone()))
 }
 
 fn has_access_token(auth: &StoredAuth) -> bool {
@@ -452,11 +467,26 @@ fn status_value(auth: &StoredAuth) -> Value {
 
 // ---- API publica (consumida por lib.rs) ------------------------------------
 
+/// Tokens de um login recem-concluido, ainda nao gravados: quem chama decide o
+/// arquivo pela identidade da conta (ver `contas::destino_do_login`) e grava com
+/// `save_login`.
+pub struct CodexLogin(StoredAuth);
+
+impl CodexLogin {
+    pub fn identity(&self) -> String {
+        identity_of(&self.0)
+    }
+}
+
 /// Executa o login pelo navegador (BLOQUEANTE: sobe o servidor de callback, abre o
-/// navegador e aguarda ate' `LOGIN_TIMEOUT`). Grava os tokens no arquivo gerenciado
-/// e devolve o status (`{connected,email,expiresAt,accountId}`). Deve ser chamada
-/// fora da main thread (ex.: `spawn_blocking`).
-pub fn login(client: &Client, config_dir: &Path) -> Result<Value, String> {
+/// navegador e aguarda ate' `LOGIN_TIMEOUT`) e devolve os tokens, sem gravar. Deve
+/// ser chamada fora da main thread (ex.: `spawn_blocking`).
+///
+/// `outra_conta`: ja' ha' conta do Codex conectada. O navegador do sistema costuma
+/// ter a sessao da OpenAI aberta e devolveria a mesma conta sem perguntar; o
+/// `prompt=login` pede a tela de login mesmo assim, para o usuario poder entrar
+/// com outra.
+pub fn login(client: &Client, outra_conta: bool) -> Result<CodexLogin, String> {
     // Cancela um login anterior que ainda esteja preso aguardando (libera a 1455) e
     // registra a flag deste login para que o botao "Cancelar" possa interrompe-lo.
     cancel();
@@ -465,7 +495,7 @@ pub fn login(client: &Client, config_dir: &Path) -> Result<Value, String> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(cancel_flag.clone());
 
-    let outcome = login_flow(client, config_dir, &cancel_flag);
+    let outcome = login_flow(client, outra_conta, &cancel_flag);
 
     // Limpa o slot se ainda for o nosso (nao pisa num login mais novo).
     {
@@ -485,64 +515,59 @@ pub fn login(client: &Client, config_dir: &Path) -> Result<Value, String> {
 
 fn login_flow(
     client: &Client,
-    config_dir: &Path,
+    outra_conta: bool,
     cancel_flag: &AtomicBool,
-) -> Result<Value, String> {
+) -> Result<CodexLogin, String> {
     let state = random_base64url(32)?;
     let verifier = random_base64url(64)?;
     let challenge = base64url(Sha256::digest(verifier.as_bytes()).as_slice());
 
-    let auth_url = reqwest::Url::parse_with_params(
-        &format!("{ISSUER}/oauth/authorize"),
-        &[
-            ("response_type", "code"),
-            ("client_id", CLIENT_ID),
-            ("redirect_uri", REDIRECT_URI),
-            ("scope", SCOPES),
-            ("code_challenge", challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("id_token_add_organizations", "true"),
-            ("codex_cli_simplified_flow", "true"),
-            ("originator", "codex_cli_rs"),
-            ("state", state.as_str()),
-        ],
-    )
-    .map_err(|error| format!("URL de autorização inválida: {error}"))?;
+    let mut params = vec![
+        ("response_type", "code"),
+        ("client_id", CLIENT_ID),
+        ("redirect_uri", REDIRECT_URI),
+        ("scope", SCOPES),
+        ("code_challenge", challenge.as_str()),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("originator", "codex_cli_rs"),
+        ("state", state.as_str()),
+    ];
+    if outra_conta {
+        params.push(("prompt", "login"));
+    }
+    let auth_url = reqwest::Url::parse_with_params(&format!("{ISSUER}/oauth/authorize"), &params)
+        .map_err(|error| format!("URL de autorização inválida: {error}"))?;
 
     open_browser(auth_url.as_str());
 
     let code = wait_for_code(&state, cancel_flag)?;
     let tokens = exchange_code(client, &code, &verifier)?;
-    let stored = stored_from_tokens(tokens, None)?;
-
-    let path = auth_file(config_dir);
-    write_stored(&path, &stored)?;
-    Ok(status_value(&stored))
+    Ok(CodexLogin(stored_from_tokens(tokens, None)?))
 }
 
-/// Le' o status atual do login pelo navegador (sem rede).
-pub fn status(config_dir: &Path) -> Value {
-    match read_stored(&auth_file(config_dir)) {
+/// Grava os tokens de um login em `path` e devolve o status
+/// (`{connected,email,expiresAt,accountId}`).
+pub fn save_login(path: &Path, login: &CodexLogin) -> Result<Value, String> {
+    write_stored(path, &login.0)?;
+    Ok(status_value(&login.0))
+}
+
+/// Status do login da conta gravada em `path` (sem rede).
+pub fn status(path: &Path) -> Value {
+    match read_stored(path) {
         Some(auth) => status_value(&auth),
         None => json!({ "connected": false, "email": Value::Null, "expiresAt": Value::Null }),
     }
 }
 
-/// Remove as credenciais do login pelo navegador ("desconectar"). Idempotente.
-pub fn logout(config_dir: &Path) -> Result<(), String> {
-    let path = auth_file(config_dir);
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Falha ao remover codex-auth.json: {error}")),
-    }
-}
-
-/// Garante um `access_token` valido no arquivo gerenciado e devolve o caminho, para
-/// os leitores (coleta/dashboard) o lerem como um `auth.json` normal. Renova via
-/// `refresh_token` quando o token esta' perto de expirar. Erro se nao ha login.
-pub fn ensure_fresh(client: &Client, config_dir: &Path) -> Result<PathBuf, String> {
-    let path = auth_file(config_dir);
+/// Garante um `access_token` valido no arquivo da conta (`path`) e devolve o
+/// caminho, para os leitores (coleta/dashboard) o lerem como um `auth.json` normal.
+/// Renova via `refresh_token` quando o token esta' perto de expirar. Erro se nao ha
+/// login.
+pub fn ensure_fresh(client: &Client, path: &Path) -> Result<PathBuf, String> {
+    let path = path.to_path_buf();
     let mut auth = read_stored(&path).filter(has_access_token).ok_or_else(|| {
         "Codex não conectado. Faça o login pelo navegador nas Configurações.".to_string()
     })?;
