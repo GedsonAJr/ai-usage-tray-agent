@@ -234,13 +234,14 @@ fn handle_invoke(app: &AppHandle, paths: &RuntimePaths, mut request: Request, cm
         }
         "get_stats" => crate::usage_dashboard::collect_stats(),
         "get_codex_stats" => {
+            let conta = args.get("conta").and_then(Value::as_str);
             let days = args.get("days").and_then(Value::as_u64).unwrap_or(30) as u32;
             let start = args
                 .get("start")
                 .and_then(Value::as_str)
                 .map(str::to_string);
             let end = args.get("end").and_then(Value::as_str).map(str::to_string);
-            crate::collect_codex_stats(paths, days, start, end)
+            crate::collect_codex_stats(paths, conta, days, start, end)
         }
         _ => json!({ "error": "comando nao permitido" }),
     };

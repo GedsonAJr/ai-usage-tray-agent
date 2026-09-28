@@ -2,7 +2,8 @@
 // da "Dashboard Claude" (cards + gráfico de barras empilhadas + tooltip), mas os
 // dados vêm de uma chamada de rede (analytics do backend do ChatGPT) pelo comando
 // IPC `get_codex_stats`, e a unidade é PERCENTUAL de uso diário (não tokens).
-// A tela carrega ao abrir e refaz a chamada ao trocar o período (30d/7d).
+// A tela carrega ao abrir e refaz a chamada ao trocar o período (30d/7d) ou a
+// conta (seletor no cabeçalho, com 2 ou mais contas do Codex).
 import { animaTrocaDeAba } from "./anima";
 import { invoke } from "./ipc";
 import { escapeHtml } from "./usage-format";
@@ -18,12 +19,22 @@ interface CodexDay {
   product_surface_usage_values: Record<string, number>;
   models: ModelUsage[];
 }
+/// Uma opção do seletor de conta.
+interface ContaOpcao {
+  chave: string;
+  apelido: string | null;
+  email: string | null;
+}
 interface CodexStats {
   units?: string;
   groupBy?: string;
   days: CodexDay[];
   generatedAt: string;
   error?: string;
+  /// Contas do seletor e a chave da que foi usada. Vêm em toda resposta, inclusive
+  /// de erro, para o seletor funcionar também no navegador.
+  contas?: ContaOpcao[];
+  conta?: string | null;
 }
 interface Segment {
   key: string;
@@ -58,6 +69,11 @@ let customTo = "";
 let customActive = false; // range personalizado aplicado (envia start/end)
 let customOpen = false; // popover de datas aberto
 let tab = "geral"; // geral | surfaces | modelos
+let CONTAS: ContaOpcao[] = [];
+/// Chave da conta mostrada. `null` só até a 1ª resposta: aí o backend escolhe a
+/// principal e devolve a chave dela.
+let conta: string | null = null;
+let contaMenuOpen = false;
 /// Cresce a cada pedido de carga. A resposta só vale se ainda for a do pedido
 /// mais recente: assim um pedido novo (trocar de período) nunca é recusado por
 /// haver outro em voo — quem se descarta é a resposta velha, que chegou tarde.
@@ -364,6 +380,43 @@ function updateApplyState(): void {
   (el("codex-range-apply") as HTMLButtonElement).disabled = !(from.value && to.value);
 }
 
+// ----- seletor de conta -----
+const rotuloConta = (c: ContaOpcao): string => c.apelido ?? c.email ?? "Conta sem e-mail";
+
+const CHECK_SVG = '<svg class="conta-op-check" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">' +
+  '<path d="M2.5 6.3 5 8.7 9.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+function setContaMenuOpen(open: boolean): void {
+  contaMenuOpen = open;
+  el("codex-conta-menu").classList.toggle("hide", !open);
+  el("codex-conta-btn").setAttribute("aria-expanded", String(open));
+}
+
+/// O botão mostra o apelido (senão o e-mail); no menu, cada conta traz o e-mail
+/// embaixo do apelido. Sem apelido, o e-mail já é o nome e não se repete.
+function renderContaSelect(): void {
+  const visivel = CONTAS.length >= 2;
+  el("codex-conta").classList.toggle("hide", !visivel);
+  if (!visivel) { setContaMenuOpen(false); return; }
+  const atual = CONTAS.find((c) => c.chave === conta) ?? CONTAS[0];
+  el("codex-conta-rotulo").textContent = rotuloConta(atual);
+  el("codex-conta-menu").innerHTML = CONTAS.map((c) => {
+    const email = c.apelido && c.email ? '<span class="conta-op-email">' + escapeHtml(c.email) + "</span>" : "";
+    return '<button type="button" class="conta-op" role="option" data-chave="' + escapeHtml(c.chave) +
+      '" aria-selected="' + (c === atual) + '"><span class="conta-op-textos"><span class="conta-op-nome">' +
+      escapeHtml(rotuloConta(c)) + "</span>" + email + "</span>" + CHECK_SVG + "</button>";
+  }).join("");
+}
+
+function escolheConta(chave: string): void {
+  setContaMenuOpen(false);
+  el("codex-conta-btn").focus();
+  if (chave === conta) return;
+  conta = chave;
+  renderContaSelect();
+  void loadCodexDashboard({ skeleton: true });
+}
+
 // Skeleton (shimmer) enquanto a chamada de rede não volta — substitui o antigo
 // texto "Carregando…" no rodapé.
 function renderLoading(): void {
@@ -416,8 +469,8 @@ export async function loadCodexDashboard(opts?: { skeleton?: boolean }): Promise
   let dados: CodexStats;
   try {
     const range = customRange();
-    const args = customActive ? { days, start: range.from, end: range.to } : { days };
-    dados = await invoke<CodexStats>("get_codex_stats", args);
+    const periodo = customActive ? { days, start: range.from, end: range.to } : { days };
+    dados = await invoke<CodexStats>("get_codex_stats", { conta, ...periodo });
   } catch (e) {
     // Uma falha que chegou tarde não pode apagar o que o pedido novo já pintou.
     if (seq !== loadSeq) return;
@@ -427,6 +480,13 @@ export async function loadCodexDashboard(opts?: { skeleton?: boolean }): Promise
   }
   if (seq !== loadSeq) return;
   DATA = dados;
+  // A conta que o backend usou pode não ser a pedida (ela foi removida): o
+  // seletor passa a mostrar a que de fato está na tela.
+  if (dados.contas) {
+    CONTAS = dados.contas;
+    conta = dados.conta ?? null;
+    renderContaSelect();
+  }
   const erro = dados.error;
   if (erro) {
     passo(() => renderMessage(erro, true));
@@ -504,16 +564,40 @@ export function initCodexDashboard(): void {
     void loadCodexDashboard({ skeleton: true });
   };
 
-  // Fecha o popover ao clicar fora (exceto no botão "Personalizado") ou com Esc.
+  const contaWrap = el("codex-conta");
+  const contaMenu = el("codex-conta-menu");
+  el("codex-conta-btn").onclick = () => { setContaMenuOpen(!contaMenuOpen); };
+  contaMenu.onclick = (e) => {
+    const op = (e.target as HTMLElement).closest<HTMLElement>(".conta-op");
+    if (op?.dataset.chave) escolheConta(op.dataset.chave);
+  };
+  // Setas andam entre as contas do menu aberto; Tab e Enter já valem por serem botões.
+  contaMenu.onkeydown = (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const ops = [...contaMenu.querySelectorAll<HTMLElement>(".conta-op")];
+    const i = ops.indexOf(document.activeElement as HTMLElement);
+    const passo = e.key === "ArrowDown" ? 1 : -1;
+    ops[(i + passo + ops.length) % ops.length]?.focus();
+  };
+
+  // Fecha os popovers ao clicar fora (o do range, exceto no botão "Personalizado")
+  // ou com Esc.
   document.addEventListener("mousedown", (e) => {
-    if (!customOpen) return;
     const t = e.target as Node;
+    if (contaMenuOpen && !contaWrap.contains(t)) setContaMenuOpen(false);
+    if (!customOpen) return;
     const pop = el("codex-range-custom");
     if (pop.contains(t) || customBtn.contains(t)) return;
     setCustomOpen(false);
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && customOpen) setCustomOpen(false);
+    if (e.key !== "Escape") return;
+    if (contaMenuOpen) {
+      setContaMenuOpen(false);
+      el("codex-conta-btn").focus();
+    }
+    if (customOpen) setCustomOpen(false);
   });
 
   void loadCodexDashboard();

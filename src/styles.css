@@ -143,6 +143,36 @@ h1 { font-size: 24px; font-weight: 600; display: flex; align-items: center; gap:
 .range-custom .rc-apply { background: #d97757; color: #1b1a18; font-weight: 600; }
 .range-custom .rc-apply:hover:not(:disabled) { background: #e0876a; }
 .range-custom .rc-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Cabeçalho do Dashboard Codex: título à esquerda, seletor de conta à direita.
+   O seletor fica fora do fluxo, ancorado à direita e centrado no título com um
+   deslocamento para baixo (o "+ 3px"). Assim o tamanho do botão e o deslocamento
+   não mexem no título nem no painel, e o seletor aparecer depois da 1ª carga (só
+   existe com 2 ou mais contas) não empurra nada. O z-index é necessário porque
+   o transform cria um contexto de empilhamento: sem ele, os botões das abas
+   (z-index 1) passariam por cima do menu aberto. */
+.dash-head { position: relative; }
+.conta-select { position: absolute; right: 0; top: 50%; transform: translateY(calc(-50% + 3px)); z-index: 30; }
+.conta-select-btn { display: flex; align-items: center; gap: 10px; max-width: 280px; background: #232220; border: 1px solid #34322d; color: #e8e6e1; border-radius: 10px; padding: 9px 14px; font: inherit; font-size: 14px; line-height: 20px; cursor: pointer;
+  transition: background .18s ease, border-color .18s ease; }
+.conta-select-btn:hover, .conta-select-btn[aria-expanded="true"] { background: #2e2d29; border-color: #46433d; }
+.conta-select-rotulo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conta-select-seta { flex: none; color: #9a968d; transition: transform .18s ease; }
+.conta-select-btn[aria-expanded="true"] .conta-select-seta { transform: rotate(180deg); }
+/* Mesmo visual do popover do range personalizado. Alinhado à direita do botão,
+   que fica na borda da tela: crescer para a esquerda é o que mantém o menu
+   inteiro visível com um e-mail longo. */
+@keyframes conta-menu-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.conta-select-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; min-width: 100%; width: max-content; max-width: 320px; background: #38362f; border: 1px solid #5a564c; border-radius: 10px; padding: 4px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.5); animation: conta-menu-in .14s ease-out; }
+.conta-op { display: flex; align-items: center; gap: 12px; width: 100%; background: transparent; border: none; border-radius: 7px; padding: 7px 10px; text-align: left; font: inherit; color: #e8e6e1; cursor: pointer; }
+.conta-op:hover, .conta-op:focus-visible { background: #46433d; outline: none; }
+.conta-op-textos { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.conta-op-nome, .conta-op-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conta-op-nome { font-size: 13.5px; }
+.conta-op-email { font-size: 12px; color: #9a968d; margin-top: 1px; }
+.conta-op-check { flex: none; color: #d97757; visibility: hidden; }
+.conta-op[aria-selected="true"] .conta-op-check { visibility: visible; }
 .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
 .card { background: #2a2926; border: 1px solid #34322d; border-radius: 10px; padding: 10px 12px; }
 .card .lbl { color: #9a968d; font-size: 13px; }
@@ -366,6 +396,9 @@ svg text { fill: #9a968d; font-size: 11px; }
 .modal-check { display: flex; align-items: center; gap: 8px; margin-top: 16px; color: #9a968d;
   font-size: 13px; cursor: pointer; user-select: none; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+/* Modal do apelido de uma conta recém-conectada. */
+.apelido-input { margin-top: 16px; }
+#apelido-conta b { color: #e8e6e1; font-weight: 600; overflow-wrap: anywhere; }
 /* Mini gráfico de linha da % ao longo das últimas ~5h (tela "Uso atual"). Fica
    logo abaixo da barra de progresso, numa moldura própria (fundo escuro + borda)
    para delimitar bem onde a área de plotagem começa e termina. */
@@ -605,6 +638,10 @@ svg.pv-ico { display: block; }
 .btn.save { background: #d97757; border-color: #d97757; color: #1a1915; font-weight: 600; }
 .btn.save:hover { background: #e08a6d; }
 .btn.save:disabled { opacity: .55; cursor: default; }
+/* Segundo clique de uma ação destrutiva (ex.: "Confirmar remoção" da conta). O
+   vermelho se distingue do laranja das ações principais. */
+.btn.danger { background: #d14b3f; border-color: #d14b3f; color: #fff; font-weight: 600; }
+.btn.danger:hover { background: #dc5c50; border-color: #dc5c50; }
 .winonly { color: #6f6c64; font-size: 11px; border: 1px solid #34322d; border-radius: 6px; padding: 1px 6px; margin-left: 8px; }
 /* Alinha pela linha de base: o aviso é bem menor que o título e, centralizado,
    ficava flutuando acima da linha dele. O recuo à direita casa com o padding

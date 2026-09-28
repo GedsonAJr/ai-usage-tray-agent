@@ -7,7 +7,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, MutexGuard, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -1113,45 +1113,85 @@ async fn force_collect(app: AppHandle) -> Value {
 /// Historico diario de uso do Codex para a tela "Dashboard Codex". Faz uma
 /// chamada de rede (analytics do backend do ChatGPT) usando o mesmo token do
 /// `auth.json` da coleta; por isso roda em `spawn_blocking` (reqwest sincrono).
-/// `days` e' o tamanho da janela (ex.: 7 ou 30) terminando hoje; `start`/`end`
-/// (opcionais) definem um range personalizado. Em falha, devolve
-/// `{ "error": "..." }` para a tela exibir a mensagem.
+/// `conta` e' a chave da conta mostrada (ausente: a principal); `days` e' o
+/// tamanho da janela (ex.: 7 ou 30) terminando hoje; `start`/`end` (opcionais)
+/// definem um range personalizado. Em falha, devolve `{ "error": "..." }` para a
+/// tela exibir a mensagem.
 #[tauri::command]
 async fn get_codex_stats(
     app: AppHandle,
+    conta: Option<String>,
     days: u32,
     start: Option<String>,
     end: Option<String>,
 ) -> Value {
     tauri::async_runtime::spawn_blocking(move || {
         let paths = app.state::<RuntimePaths>().inner().clone();
-        collect_codex_stats(&paths, days, start, end)
+        collect_codex_stats(&paths, conta.as_deref(), days, start, end)
     })
     .await
     .unwrap_or_else(|error| json!({ "error": error.to_string() }))
 }
 
+/// Conta cujo historico o Dashboard Codex mostra: a pedida, senao a principal. A
+/// pedida pode ter sido removida desde que a tela montou o seletor.
+fn conta_do_dashboard<'a>(
+    contas: &'a [contas::Conta],
+    pedida: Option<&str>,
+) -> Option<&'a contas::Conta> {
+    pedida
+        .and_then(|chave| contas.iter().find(|conta| conta.chave == chave))
+        .or_else(|| contas.iter().find(|conta| conta.principal))
+}
+
 /// Coleta o historico de uso do Codex (rede): resolve o `auth.json` da conta
-/// principal e delega para `codex_dashboard::collect` com o cliente HTTP
+/// escolhida e delega para `codex_dashboard::collect` com o cliente HTTP
 /// compartilhado. Compartilhado pelo comando nativo `get_codex_stats` e pelo
 /// handler HTTP, que antes duplicavam esta logica.
+///
+/// A resposta leva tambem as contas do seletor (na ordem dos cards do "Uso
+/// atual") e a chave da conta usada, inclusive em erro: e' por ela que a tela
+/// monta o seletor, no app e no navegador, onde os comandos de conta nao estao
+/// liberados.
 pub(crate) fn collect_codex_stats(
     paths: &RuntimePaths,
+    conta: Option<&str>,
     days: u32,
     start: Option<String>,
     end: Option<String>,
 ) -> Value {
     let client = http_client();
-    let arquivo = contas::listar(&paths.config_dir, Provedor::Codex)
-        .into_iter()
-        .find(|conta| conta.principal)
-        .map(|conta| conta.arquivo)
+    let prefs = contas::ler_prefs(&paths.config_dir);
+    let mut lista = contas::listar(&paths.config_dir, Provedor::Codex);
+    let chaves: Vec<String> = lista.iter().map(|c| c.chave.clone()).collect();
+    let ordem = contas::ordenar(&chaves, &prefs.ordem);
+    lista.sort_by_key(|c| ordem.iter().position(|chave| *chave == c.chave));
+
+    let escolhida = conta_do_dashboard(&lista, conta);
+    let arquivo = escolhida
+        .map(|c| c.arquivo.clone())
         .unwrap_or_else(|| codex_auth::auth_file(&paths.config_dir));
-    let auth_path = match resolve_codex_auth_file(&client, &arquivo) {
-        Ok(path) => path,
-        Err(error) => return json!({ "error": error }),
+    let mut resultado = match resolve_codex_auth_file(&client, &arquivo) {
+        Ok(auth_path) => {
+            codex_dashboard::collect(&client, &auth_path.to_string_lossy(), days, start, end)
+        }
+        Err(error) => json!({ "error": error }),
     };
-    codex_dashboard::collect(&client, &auth_path.to_string_lossy(), days, start, end)
+    if let Some(objeto) = resultado.as_object_mut() {
+        objeto.insert("conta".into(), json!(escolhida.map(|c| &c.chave)));
+        let opcoes: Vec<Value> = lista
+            .iter()
+            .map(|c| {
+                json!({
+                    "chave": c.chave,
+                    "apelido": prefs.apelido(&c.chave),
+                    "email": c.email,
+                })
+            })
+            .collect();
+        objeto.insert("contas".into(), Value::Array(opcoes));
+    }
+    resultado
 }
 
 /// Estado exposto a' tela "Envio de dados": pausa geral, envio por provider
@@ -3942,11 +3982,22 @@ fn capture_claude_login(
         // de login passa a mostrar a escolha (`claude-org.html`) e o login so' termina
         // quando o usuario confirma (`claude_select_org`, que fecha a janela) ou desiste.
         _ => {
+            conta_gravada_na_escolha_de_org().take();
             claude_auth::set_pending_login(claude_auth::PendingLogin { session_key, orgs });
             show_claude_org_picker(app, window);
             wait_claude_org_choice(app, window, cancel_flag)
         }
     }
+}
+
+/// Status da conta que `claude_select_org` gravou, guardado para o `claude_login`
+/// que esperava a escolha devolve-lo com a chave: e' por ela que a aba Claude sabe
+/// qual conta acabou de entrar (e oferece o apelido).
+fn conta_gravada_na_escolha_de_org() -> MutexGuard<'static, Option<Value>> {
+    static SLOT: OnceLock<Mutex<Option<Value>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Grava um login do Claude no arquivo da conta — a mesma conta reconectada cai no
@@ -3982,8 +4033,8 @@ fn show_claude_org_picker(app: &AppHandle, window: &WebviewWindow) {
 
 /// Espera a escolha da org na janela de login. `claude_select_org` consome o login
 /// pendente, grava e fecha a janela; se ela fechar com o login ainda pendente, o
-/// usuario desistiu. Devolve `null` quando a conta foi gravada (a aba relê a lista
-/// de contas), ou "Login cancelado.".
+/// usuario desistiu. Devolve o status da conta gravada (com a chave), ou "Login
+/// cancelado.".
 fn wait_claude_org_choice(
     app: &AppHandle,
     window: &WebviewWindow,
@@ -3999,7 +4050,9 @@ fn wait_claude_org_choice(
         if app.get_webview_window("claude-login").is_none() {
             return match claude_auth::take_pending_login() {
                 Some(_) => Err("Login cancelado.".to_string()),
-                None => Ok(Value::Null),
+                None => Ok(conta_gravada_na_escolha_de_org()
+                    .take()
+                    .unwrap_or(Value::Null)),
             };
         }
         thread::sleep(Duration::from_millis(300));
@@ -4160,6 +4213,8 @@ async fn claude_select_org(app: AppHandle, organization_id: String) -> Result<Va
         let email = claude_auth::fetch_email(&client, &pending.session_key);
         match salvar_login_claude(&paths, &pending.session_key, &organization_id, email) {
             Ok(status) => {
+                // Antes de fechar a janela: e' o fechamento que libera a espera.
+                *conta_gravada_na_escolha_de_org() = Some(status.clone());
                 if let Some(window) = app.get_webview_window("claude-login") {
                     let _ = window.close();
                 }
@@ -4343,6 +4398,23 @@ mod tests {
         let mut sem_claude = AppConfig::default();
         sem_claude.envio.claude = false;
         assert!(!envia_ao_loki(&sem_claude, &alvo(true), false));
+    }
+
+    #[test]
+    fn dashboard_codex_usa_a_conta_pedida_senao_a_principal() {
+        let conta = |chave: &str, principal: bool| contas::Conta {
+            chave: chave.to_string(),
+            arquivo: PathBuf::new(),
+            principal,
+            email: None,
+        };
+        let lista = [conta("codex:a", true), conta("codex:b", false)];
+        let chave = |pedida| conta_do_dashboard(&lista, pedida).map(|c| c.chave.as_str());
+        assert_eq!(chave(Some("codex:b")), Some("codex:b"));
+        assert_eq!(chave(None), Some("codex:a"));
+        // Removida desde que a tela montou o seletor: volta para a principal.
+        assert_eq!(chave(Some("codex:x")), Some("codex:a"));
+        assert_eq!(conta_do_dashboard(&[], None).map(|c| &c.chave), None);
     }
 
     #[test]

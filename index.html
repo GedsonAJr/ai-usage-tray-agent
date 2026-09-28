@@ -70,6 +70,7 @@
         <!-- ===== Dashboard ===== -->
         <section id="view-dashboard" class="view">
           <h1>Dashboard Claude</h1>
+          <p class="sub">Uso do Claude Code nesta máquina, de todas as contas.</p>
           <div class="panel">
             <div class="toolbar">
               <div class="tabs">
@@ -115,7 +116,17 @@
 
         <!-- ===== Dashboard Codex ===== -->
         <section id="view-codex-dashboard" class="view">
-          <h1>Dashboard Codex</h1>
+          <div class="dash-head">
+            <h1>Dashboard Codex</h1>
+            <!-- Seletor de conta: só aparece com 2 ou mais contas do Codex. -->
+            <div class="conta-select hide" id="codex-conta">
+              <button type="button" class="conta-select-btn" id="codex-conta-btn" aria-haspopup="listbox" aria-expanded="false" title="Conta mostrada no dashboard">
+                <span class="conta-select-rotulo" id="codex-conta-rotulo"></span>
+                <svg class="conta-select-seta" viewBox="0 0 12 12" width="14" height="14" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <div class="conta-select-menu hide" id="codex-conta-menu" role="listbox" aria-label="Conta"></div>
+            </div>
+          </div>
           <div class="panel">
             <div class="toolbar">
               <div class="tabs codex-tabs">
@@ -674,6 +685,22 @@
           <button type="button" id="modal-confirm" class="btn btn-primary">Desabilitar</button>
         </div>
       </div>
+    </div>
+    <!-- Apelido de uma conta recém-conectada (settings.ts). Opcional: "Agora não"
+         fecha sem gravar. É um <form> para o Enter salvar. -->
+    <div id="apelido-overlay" class="modal-overlay hide">
+      <form class="modal" id="apelido-form" role="dialog" aria-modal="true" aria-labelledby="apelido-title">
+        <div class="modal-title" id="apelido-title">Dar um apelido à conta?</div>
+        <div class="modal-body">
+          <span id="apelido-conta"></span> O apelido aparece no lugar do e-mail nos
+          cards e no seletor de conta, e pode ser mudado depois nas Configurações.
+        </div>
+        <input type="text" id="apelido-input" class="apelido-input" placeholder="Ex.: Trabalho, Pessoal" autocomplete="off" aria-label="Apelido">
+        <div class="modal-actions">
+          <button type="button" id="apelido-pular" class="btn">Agora não</button>
+          <button type="submit" id="apelido-salvar" class="btn btn-primary">Salvar</button>
+        </div>
+      </form>
     </div>
   </body>
 </html>

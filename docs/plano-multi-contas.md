@@ -11,7 +11,7 @@
 | 2. Sessão automática acompanha a conta do CLI | a fazer |
 | 3. Widget flutuante escolhe as contas | a fazer |
 | 4. Barra de tarefas escolhe as contas | a fazer |
-| 5. Dashboard Codex com seletor de conta | a fazer |
+| 5. Dashboard Codex com seletor de conta | **concluída e validada** |
 | 6. Envio escolhe a conta enviada | a fazer |
 | Fechamento (README, CHANGELOG, sync com upstream) | a fazer |
 
@@ -44,9 +44,26 @@ provedor.
 - Para aumentar no futuro, basta mudar a constante nos dois lugares e revisar o layout
   dessas telas.
 
+**Diretriz de design: apelido com no máximo 20 caracteres**, para caber inteiro no seletor
+do Dashboard Codex e nos cards. Mesma divisão do limite de contas: `contas::MAX_APELIDO`
+corta o excedente ao gravar, e `settings.ts` (`MAX_APELIDO`) põe o `maxlength` do campo.
+Um apelido mais longo, salvo antes do limite, continua como está até ser editado.
+
+**Apelido oferecido depois do login.** No campo da lista ele passava despercebido. Ao
+**adicionar** uma conta (Claude ou Codex), a aba abre um modal opcional para o apelido
+("Agora não", Esc ou clique fora fecham sem gravar). Reconectar uma conta que já estava na
+lista não pergunta. Para saber qual conta entrou, a aba usa a `chave` que o login devolve.
+No Claude com várias orgs, o `claude_login` devolvia `null`, porque quem grava a conta é o
+`claude_select_org`. Agora esse comando guarda o status gravado para o `claude_login`
+devolver. Também na mesma leva: "Confirmar remoção" fica vermelho. README (fechamento):
+citar o modal na aba de contas das Configurações.
+
 **Pendências do README para o fechamento:** a seção "Uso atual" (cita `set_providers_order`
 e um card por provedor), a aba de contas das Configurações e os arquivos novos em
-`%APPDATA%` (`contas/`, `contas.json`).
+`%APPDATA%` (`contas/`, `contas.json`). Da Etapa 5: na seção "Dashboard Codex", o seletor
+de conta no cabeçalho e o "`auth.json` da coleta", que passa a ser o da conta escolhida;
+na seção "Dashboard Claude", que ele soma todas as contas que usaram o Claude Code na
+máquina (o subtítulo novo da tela).
 
 **Correção avulsa feita na branch: login do Claude com Google.** A janela de login não
 tratava `window.open`, e o wry descartava o popup do "Continuar com Google" em silêncio; a
@@ -215,9 +232,20 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
   rótulo da conta.
 
 ### Etapa 5: Dashboard Codex com seletor de conta
-- `get_codex_stats(conta, …)`, com o padrão na principal. Atualizar a allowlist do
-  `http_server.rs:36`.
-- Seletor na `.toolbar`, visível só com 2 ou mais contas.
+- `get_codex_stats(conta, …)`, com o padrão na principal.
+- Seletor no cabeçalho, do lado oposto ao título, visível só com 2 ou mais contas. O
+  botão mostra o apelido (senão o e-mail); no menu, cada conta traz o e-mail embaixo do
+  apelido.
+- **Ajuste de desenho feito na implementação:** a lista de contas do seletor vem **na
+  própria resposta** do `get_codex_stats` (`contas` + `conta` usada, inclusive em erro),
+  e não de `codex_auth_status`. Assim o seletor funciona também no navegador (servidor
+  HTTP) sem liberar um comando de conta na allowlist do `http_server.rs`: o handler só
+  passou a repassar `conta`. Se a conta pedida foi removida, o backend usa a principal e
+  o seletor passa a mostrá-la.
+- Dashboard Claude, subtítulo "Uso do Claude Code nesta máquina, de todas as contas": ele
+  lê os arquivos locais do CLI, que não dizem de qual conta veio cada mensagem.
+- Validado com o app rodando, com o botão calibrado junto (40px de altura, 3px abaixo do
+  centro do título).
 
 ### Etapa 6: Envio escolhe a conta enviada
 - Aba Envio: por provedor, o seletor "Conta enviada". Ele é o "Tornar principal", que sai da

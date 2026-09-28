@@ -36,6 +36,11 @@ const ARQUIVO_PREFS: &str = "contas.json";
 /// (`MAX_CONTAS_POR_PROVEDOR`) para esconder o "Adicionar conta".
 pub const MAX_CONTAS_POR_PROVEDOR: usize = 2;
 
+/// Tamanho maximo do apelido, em caracteres: curto o bastante para caber inteiro
+/// no seletor do Dashboard Codex e nos cards do "Uso atual". O frontend espelha o
+/// valor em `settings.ts` (`MAX_APELIDO`), no `maxlength` do campo.
+pub const MAX_APELIDO: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provedor {
     Claude,
@@ -347,7 +352,8 @@ fn gravar_prefs_sem_trava(config_dir: &Path, prefs: &Prefs) -> Result<(), String
     gravar_atomico(&config_dir.join(ARQUIVO_PREFS), &format!("{conteudo}\n"))
 }
 
-/// Define (ou limpa, com vazio/`None`) o apelido de uma conta.
+/// Define (ou limpa, com vazio/`None`) o apelido de uma conta. Acima de
+/// `MAX_APELIDO` caracteres, o apelido e' cortado.
 pub fn definir_apelido(
     config_dir: &Path,
     chave: &str,
@@ -355,7 +361,10 @@ pub fn definir_apelido(
 ) -> Result<(), String> {
     let _trava = trava();
     let apelido = apelido
-        .map(|texto| texto.trim().to_string())
+        .map(|texto| {
+            let cortado: String = texto.trim().chars().take(MAX_APELIDO).collect();
+            cortado.trim_end().to_string()
+        })
         .filter(|texto| !texto.is_empty());
     let mut prefs = ler_prefs_sem_trava(config_dir);
     match apelido {
@@ -627,6 +636,38 @@ mod tests {
         assert_eq!(ler_prefs(&dir).apelido("claude:1"), Some("Trabalho"));
         definir_apelido(&dir, "claude:1", Some("   ".to_string())).unwrap();
         assert_eq!(ler_prefs(&dir), Prefs::default());
+    }
+
+    #[test]
+    fn apelido_longo_e_cortado_no_limite() {
+        let dir = pasta("apelido-longo");
+        definir_apelido(
+            &dir,
+            "claude:1",
+            Some("Conta do trabalho da empresa".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            ler_prefs(&dir).apelido("claude:1"),
+            Some("Conta do trabalho da")
+        );
+        // O corte que termina num espaco nao deixa o espaco no fim.
+        definir_apelido(
+            &dir,
+            "claude:1",
+            Some("Conta do trabalho   xyz".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            ler_prefs(&dir).apelido("claude:1"),
+            Some("Conta do trabalho")
+        );
+        // Conta caracteres, nao bytes: acentos nao encurtam o limite.
+        definir_apelido(&dir, "claude:1", Some("ç".repeat(25))).unwrap();
+        assert_eq!(
+            ler_prefs(&dir).apelido("claude:1"),
+            Some("ç".repeat(MAX_APELIDO).as_str())
+        );
     }
 
     #[test]

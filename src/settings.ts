@@ -361,6 +361,9 @@ type ProvedorConta = "codex" | "claude";
 /// Espelha `contas::MAX_CONTAS_POR_PROVEDOR` (limite de design). O backend recusa a
 /// conta a mais de qualquer forma; aqui só esconde o "Adicionar conta".
 const MAX_CONTAS_POR_PROVEDOR = 2;
+/// Espelha `contas::MAX_APELIDO` (caracteres). O backend corta o excedente de
+/// qualquer forma; aqui o campo não deixa digitar além.
+const MAX_APELIDO = 20;
 
 interface ContaStatus {
   /// "<provedor>:<id>", estável entre reconexões.
@@ -421,7 +424,7 @@ function contaHtml(p: ProvedorConta, c: ContaStatus, varias: boolean): string {
       <div class="conta-nome">${escapeHtml(c.email ?? "Conta sem e-mail")}${selo}</div>
       <div class="conta-status ${ativa ? "ok" : "warn"}">${status}</div>
     </div>
-    <input type="text" class="conta-apelido" placeholder="Apelido" maxlength="40" value="${escapeHtml(c.apelido ?? "")}">
+    <input type="text" class="conta-apelido" placeholder="Apelido" maxlength="${MAX_APELIDO}" value="${escapeHtml(c.apelido ?? "")}">
     <div class="conta-acoes">
       ${c.needsReconnect || !c.connected ? botao("reconectar", "Reconectar") : ""}
       ${varias && !c.principal ? botao("principal", "Tornar principal") : ""}
@@ -475,6 +478,8 @@ async function contaLogin(p: ProvedorConta): Promise<void> {
   const cancelBtn = $(`set-${p}LoginCancel`);
   const statusEl = $(`set-${p}AuthStatus`);
   const outraConta = ui.contas.length > 0;
+  const antes = new Set(ui.contas.map((c) => c.chave));
+  let nova: string | null = null;
   ui.loginEmAndamento = true;
   $(`set-${p}Login`).hidden = true;
   cancelBtn.hidden = false;
@@ -486,8 +491,9 @@ async function contaLogin(p: ProvedorConta): Promise<void> {
       ? "Aguardando o login no navegador… Se ele entrar direto na conta já conectada, saia dela no navegador e tente de novo."
       : "Aguardando o login no navegador…";
   try {
-    await invoke(`${p}_login`);
+    const status = await invoke<{ chave?: string } | null>(`${p}_login`);
     setMsg(`${ui.nome} conectado.`, "ok");
+    if (status?.chave && !antes.has(status.chave)) nova = status.chave;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // Cancelamento é ação do usuário; não polui o topo com aviso.
@@ -498,6 +504,53 @@ async function contaLogin(p: ProvedorConta): Promise<void> {
     cancelBtn.hidden = true;
     await loadContas(p, true);
   }
+  const conta = ui.contas.find((c) => c.chave === nova);
+  if (conta) await pedirApelido(p, conta);
+}
+
+/// Oferece o apelido de uma conta que acabou de ser ADICIONADA, num modal: no campo
+/// da lista ele passava despercebido. É opcional ("Agora não", Esc ou clique fora
+/// fecham sem gravar). Reconectar uma conta que já estava na lista não pergunta.
+function pedirApelido(p: ProvedorConta, conta: ContaStatus): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = $("apelido-overlay");
+    const form = $<HTMLFormElement>("apelido-form");
+    const input = $<HTMLInputElement>("apelido-input");
+    const salvar = $<HTMLButtonElement>("apelido-salvar");
+    const pular = $<HTMLButtonElement>("apelido-pular");
+    $("apelido-conta").innerHTML =
+      `${PROVEDORES[p].nome} conectado como <b>${escapeHtml(conta.email ?? "conta sem e-mail")}</b>.`;
+    input.maxLength = MAX_APELIDO;
+    input.value = "";
+    salvar.disabled = true;
+    overlay.classList.remove("hide");
+    input.focus();
+
+    const onInput = (): void => { salvar.disabled = !input.value.trim(); };
+    const fechar = (): void => {
+      overlay.classList.add("hide");
+      input.removeEventListener("input", onInput);
+      form.removeEventListener("submit", onSubmit);
+      pular.removeEventListener("click", fechar);
+      overlay.removeEventListener("mousedown", onBackdrop);
+      document.removeEventListener("keydown", onKey);
+      resolve();
+    };
+    const onSubmit = (e: SubmitEvent): void => {
+      e.preventDefault();
+      const apelido = input.value.trim();
+      if (!apelido) return;
+      fechar();
+      void salvarApelido(p, conta.chave, apelido);
+    };
+    const onBackdrop = (e: MouseEvent): void => { if (e.target === overlay) fechar(); };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === "Escape") fechar(); };
+    input.addEventListener("input", onInput);
+    form.addEventListener("submit", onSubmit);
+    pular.addEventListener("click", fechar);
+    overlay.addEventListener("mousedown", onBackdrop);
+    document.addEventListener("keydown", onKey);
+  });
 }
 
 /// Cancela um login em andamento (o contaLogin pendente rejeita e se recupera).
@@ -560,9 +613,11 @@ function wireContas(p: ProvedorConta): void {
       if (btn.dataset.confirmar !== "1") {
         btn.dataset.confirmar = "1";
         btn.textContent = "Confirmar remoção";
+        btn.classList.add("danger");
         window.setTimeout(() => {
           delete btn.dataset.confirmar;
           btn.textContent = "Remover";
+          btn.classList.remove("danger");
         }, 3000);
         return;
       }
