@@ -12,7 +12,7 @@
 | 3. Widget flutuante escolhe as contas | **concluída e validada** |
 | 4. Barra de tarefas escolhe as contas | **concluída e validada** |
 | 5. Dashboard Codex com seletor de conta | **concluída e validada** |
-| 6. Envio escolhe a conta enviada | a fazer |
+| 6. Envio escolhe a conta enviada | **concluída e validada** |
 | Fechamento (README, CHANGELOG, sync com upstream) | a fazer |
 
 **Validação manual da Etapa 1** (com o app rodando):
@@ -331,10 +331,20 @@ o que casa com a decisão "uma por provedor, o usuário escolhe" e com a versão
   centro do título).
 
 ### Etapa 6: Envio escolhe a conta enviada
-- Aba Envio: por provedor, o seletor "Conta enviada". Ele é o "Tornar principal", que sai da
-  lista de contas das Configurações. O liga/desliga `envio.claude/codex` do `config.json`
-  continua valendo.
-- `envio.ts` mostra a conta enviada.
+- **Desenho revisto (decisão dele): a conta enviada é uma escolha à parte da principal**,
+  como na barra: sem escolha, vai a principal. O "Tornar principal" continua na lista de
+  contas das Configurações (a principal segue sendo a que as telas mostram primeiro e a
+  única que a versão antiga vê).
+- `contas.json` ganha `contaEnviada` (provedor → chave; `set_conta_enviada`, vale a partir
+  do próximo ciclo). `envia_ao_loki` recebe a escolhida (já conferida contra as contas do
+  ciclo por `enviada_escolhida`); sem ela, a principal. Continua indo uma conta por
+  provedor, então o Loki segue com um stream por provedor. Remover a conta limpa a escolha.
+- Aba Envio: o cartão de cada provedor ganhou, com 2 ou mais contas, um radio por conta
+  (o mesmo cartão das abas Widget e Barra; o `settings.ts` passou a ter uma função só para
+  as três listas). O liga/desliga `envio.claude/codex` do `config.json` continua valendo.
+- Tela "Envio de dados": com mais de uma conta no provedor, diz qual está sendo enviada
+  ("Claude: ativado (Trabalho)").
+- Teste: `so_a_conta_enviada_vai_ao_loki` (substituiu o `so_a_principal_vai_ao_loki`).
 
 ### Fechamento (antes do PR)
 - Sincronizar a branch: `git fetch upstream && git merge upstream/main`. Fazer também de

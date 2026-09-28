@@ -302,11 +302,13 @@ pub fn remover(config_dir: &Path, chave: &str) -> Result<(), String> {
     let mut prefs = ler_prefs_sem_trava(config_dir);
     let tinha = prefs.contas.remove(chave).is_some()
         || prefs.ordem.iter().any(|k| k == chave)
-        || prefs.conta_na_barra.values().any(|k| k == chave);
+        || prefs.conta_na_barra.values().any(|k| k == chave)
+        || prefs.conta_enviada.values().any(|k| k == chave);
     if tinha {
         prefs.ordem.retain(|k| k != chave);
-        // A barra volta a' principal do provedor.
+        // A barra e o envio voltam a' principal do provedor.
         prefs.conta_na_barra.retain(|_, k| k != chave);
+        prefs.conta_enviada.retain(|_, k| k != chave);
         gravar_prefs_sem_trava(config_dir, &prefs)?;
     }
     Ok(())
@@ -327,6 +329,11 @@ pub struct Prefs {
     /// a principal.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub conta_na_barra: BTreeMap<String, String>,
+    /// Conta enviada ao Loki, por provedor (`"claude"` -> chave). Vai uma conta por
+    /// provedor (um stream por provedor, como na versao anterior); sem escolha (ou
+    /// se a escolhida sumiu), a principal.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub conta_enviada: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -353,6 +360,11 @@ impl Prefs {
         self.conta_na_barra
             .get(provedor.chave())
             .map(String::as_str)
+    }
+
+    /// Conta escolhida para o envio ao Loki no provedor, se houver escolha.
+    pub fn conta_enviada(&self, provedor: Provedor) -> Option<&str> {
+        self.conta_enviada.get(provedor.chave()).map(String::as_str)
     }
 
     /// A conta aparece no widget (se o provedor dela tambem estiver ligado la').
@@ -429,16 +441,28 @@ pub fn definir_mostra_no_widget(
     gravar_prefs_sem_trava(config_dir, &prefs)
 }
 
-/// Escolhe a conta que a barra de tarefas mostra no provedor dela.
-pub fn definir_conta_na_barra(config_dir: &Path, chave: &str) -> Result<(), String> {
+/// Grava a conta escolhida (barra ou envio) no mapa por provedor que `mapa` aponta.
+fn definir_escolha(
+    config_dir: &Path,
+    chave: &str,
+    mapa: fn(&mut Prefs) -> &mut BTreeMap<String, String>,
+) -> Result<(), String> {
     let provedor =
         Provedor::da_chave(chave).ok_or_else(|| format!("Conta desconhecida: {chave}"))?;
     let _trava = trava();
     let mut prefs = ler_prefs_sem_trava(config_dir);
-    prefs
-        .conta_na_barra
-        .insert(provedor.chave().to_string(), chave.to_string());
+    mapa(&mut prefs).insert(provedor.chave().to_string(), chave.to_string());
     gravar_prefs_sem_trava(config_dir, &prefs)
+}
+
+/// Escolhe a conta que a barra de tarefas mostra no provedor dela.
+pub fn definir_conta_na_barra(config_dir: &Path, chave: &str) -> Result<(), String> {
+    definir_escolha(config_dir, chave, |prefs| &mut prefs.conta_na_barra)
+}
+
+/// Escolhe a conta enviada ao Loki no provedor dela.
+pub fn definir_conta_enviada(config_dir: &Path, chave: &str) -> Result<(), String> {
+    definir_escolha(config_dir, chave, |prefs| &mut prefs.conta_enviada)
 }
 
 /// Grava a nova ordem dos cards. Chaves que nao estao na tela agora (ex.: de um
@@ -677,8 +701,14 @@ mod tests {
         definir_apelido(&dir, &chave_a, Some("Pessoal".to_string())).unwrap();
         definir_ordem(&dir, &[chave_b.clone(), chave_a.clone()]).unwrap();
         definir_conta_na_barra(&dir, &chave_a).unwrap();
+        definir_conta_enviada(&dir, &chave_a).unwrap();
+        let antes = ler_prefs(&dir);
         assert_eq!(
-            ler_prefs(&dir).conta_na_barra(Provedor::Claude),
+            antes.conta_na_barra(Provedor::Claude),
+            Some(chave_a.as_str())
+        );
+        assert_eq!(
+            antes.conta_enviada(Provedor::Claude),
             Some(chave_a.as_str())
         );
 
@@ -689,8 +719,9 @@ mod tests {
         assert!(contas[0].principal);
         let prefs = ler_prefs(&dir);
         assert_eq!(prefs.apelido(&chave_a), None);
-        // A barra volta a' principal (a escolha some com a conta).
+        // A barra e o envio voltam a' principal (a escolha some com a conta).
         assert_eq!(prefs.conta_na_barra(Provedor::Claude), None);
+        assert_eq!(prefs.conta_enviada(Provedor::Claude), None);
         assert_eq!(prefs.ordem, vec![chave_b]);
     }
 

@@ -14,6 +14,8 @@ import { ICON_CLAUDE, iconCodex, escapeHtml, pctText } from "./usage-format";
 interface ProviderEnvio {
   habilitado: boolean;
   enviar: boolean;
+  /// Rótulo da conta enviada, quando o provedor tem mais de uma conta (nulo com uma).
+  conta?: string | null;
 }
 // Payload (dados) enviado ao Loki, anexado às entradas de sucesso para que o
 // histórico mostre exatamente o que foi enviado. Espelha o body montado no backend.
@@ -132,9 +134,11 @@ function renderState(): void {
     badge = '<span class="envio-badge active"><span class="envio-live"></span>Envio ativo</span>';
     sub = ""; // a contagem do próximo envio foi para o subtítulo da página (renderSub).
   }
-  const provState = (label: string, on: boolean): string =>
-    `${label}: <span class="envio-prov-state ${on ? "on" : "off"}">${on ? "ativado" : "desativado"}</span>`;
-  const provStatus = `${provState("Claude", DATA.claude.enviar)} · ${provState("Codex", DATA.codex.enviar)}`;
+  // Com mais de uma conta no provedor, diz qual está sendo enviada.
+  const provState = (label: string, prov: ProviderEnvio): string =>
+    `${label}: <span class="envio-prov-state ${prov.enviar ? "on" : "off"}">${prov.enviar ? "ativado" : "desativado"}</span>` +
+    (prov.enviar && prov.conta ? ` <span class="envio-prov-conta">(${escapeHtml(prov.conta)})</span>` : "");
+  const provStatus = `${provState("Claude", DATA.claude)} · ${provState("Codex", DATA.codex)}`;
   // Só renderiza a linha de descrição quando há texto (o estado ativo não a usa mais).
   const subHtml = sub ? `<div class="envio-sub">${sub}</div>` : "";
 

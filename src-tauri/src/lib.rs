@@ -783,6 +783,7 @@ pub fn run() {
             set_conta_apelido,
             set_conta_widget,
             set_conta_barra,
+            set_conta_enviada,
             set_conta_principal
         ])
         .setup(|app| {
@@ -1239,6 +1240,7 @@ fn envio_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
         )
     };
     let config = read_config(paths);
+    let prefs = contas::ler_prefs(&paths.config_dir);
     json!({
         "paused": paused,
         "intervaloSegundos": config.intervalo_segundos,
@@ -1247,13 +1249,39 @@ fn envio_value(paths: &RuntimePaths, shared: &Arc<SharedState>) -> Value {
         "claude": {
             "habilitado": config.providers.claude.habilitado,
             "enviar": config.envio.claude,
+            "conta": rotulo_da_enviada(&paths.config_dir, &prefs, Provedor::Claude),
         },
         "codex": {
             "habilitado": config.providers.codex.habilitado,
             "enviar": config.envio.codex,
+            "conta": rotulo_da_enviada(&paths.config_dir, &prefs, Provedor::Codex),
         },
         "log": log,
     })
+}
+
+/// Rotulo (apelido, senao e-mail) da conta enviada ao Loki no provedor, para a tela
+/// "Envio de dados" dizer qual e'. So' com mais de uma conta: com uma, nao ha' o que
+/// distinguir. A enviada e' a escolhida na aba Envio, se ainda existe, senao a
+/// principal (a regra de `envia_ao_loki`).
+fn rotulo_da_enviada(
+    config_dir: &Path,
+    prefs: &contas::Prefs,
+    provedor: Provedor,
+) -> Option<String> {
+    let lista = contas::listar(config_dir, provedor);
+    if lista.len() < 2 {
+        return None;
+    }
+    let escolhida = prefs.conta_enviada(provedor);
+    let conta = lista
+        .iter()
+        .find(|c| Some(c.chave.as_str()) == escolhida)
+        .or_else(|| lista.iter().find(|c| c.principal))?;
+    prefs
+        .apelido(&conta.chave)
+        .map(str::to_string)
+        .or_else(|| conta.email.clone())
 }
 
 /// Le' o estado da tela "Envio de dados". Barato e sem rede; chamado ao abrir a
@@ -2009,14 +2037,29 @@ fn alvos_da_coleta(config: &AppConfig, config_dir: &Path) -> Vec<Alvo> {
 }
 
 /// Se a metrica da conta vai ao Loki: envio nao pausado, envio do provedor ligado
-/// em `config.envio` e a conta e' a principal. So' a principal e' enviada, entao o
-/// Loki continua recebendo um stream por provedor, como na versao anterior.
-fn envia_ao_loki(config: &AppConfig, alvo: &Alvo, pausado: bool) -> bool {
+/// em `config.envio` e a conta e' a enviada do provedor: a escolhida na aba Envio
+/// (`escolhida`, ja' conferida contra as contas do ciclo) ou, sem escolha, a
+/// principal. Vai uma conta por provedor, entao o Loki continua recebendo um stream
+/// por provedor, como na versao anterior.
+fn envia_ao_loki(config: &AppConfig, alvo: &Alvo, pausado: bool, escolhida: Option<&str>) -> bool {
     let provedor_ligado = match alvo.provedor {
         Provedor::Claude => config.envio.claude,
         Provedor::Codex => config.envio.codex,
     };
-    !pausado && provedor_ligado && alvo.principal
+    let e_a_enviada = escolhida.map_or(alvo.principal, |chave| chave == alvo.chave);
+    !pausado && provedor_ligado && e_a_enviada
+}
+
+/// Conta enviada ao Loki escolhida no provedor, se ela ainda esta' entre as contas
+/// do ciclo (removida, volta a' principal).
+fn enviada_escolhida<'a>(
+    prefs: &'a contas::Prefs,
+    alvos: &[Alvo],
+    provedor: Provedor,
+) -> Option<&'a str> {
+    prefs
+        .conta_enviada(provedor)
+        .filter(|chave| alvos.iter().any(|alvo| alvo.chave == *chave))
 }
 
 /// Coleta as metricas de todas as contas dos providers habilitados (sempre, para
@@ -2083,8 +2126,10 @@ fn run_collection_cycle<R: Runtime>(
             .collect()
     });
 
+    let prefs = contas::ler_prefs(&paths.config_dir);
     let mut had_error = false;
     for (alvo, result) in alvos.iter().zip(resultados) {
+        let escolhida = enviada_escolhida(&prefs, &alvos, alvo.provedor);
         had_error |= handle_collected(
             app,
             paths,
@@ -2093,7 +2138,7 @@ fn run_collection_cycle<R: Runtime>(
             &config,
             alvo,
             result,
-            envia_ao_loki(&config, alvo, paused),
+            envia_ao_loki(&config, alvo, paused, escolhida),
         );
     }
 
@@ -4385,13 +4430,17 @@ fn claude_org_utilization(
 fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
     let prefs = contas::ler_prefs(config_dir);
     let contas = contas::listar(config_dir, provedor);
-    // A conta da barra de tarefas: a escolhida, se ainda existe, senao a principal
-    // (a mesma regra de `chave_da_barra`, aqui contra a lista do disco).
-    let na_barra = prefs
-        .conta_na_barra(provedor)
-        .filter(|chave| contas.iter().any(|c| c.chave == *chave))
-        .map(str::to_string)
-        .or_else(|| contas.iter().find(|c| c.principal).map(|c| c.chave.clone()));
+    // A conta da barra de tarefas e a enviada ao Loki: a escolhida, se ainda existe,
+    // senao a principal (a mesma regra de `chave_da_barra`/`envia_ao_loki`, aqui
+    // contra a lista do disco).
+    let resolvida = |escolhida: Option<&str>| {
+        escolhida
+            .filter(|chave| contas.iter().any(|c| c.chave == *chave))
+            .map(str::to_string)
+            .or_else(|| contas.iter().find(|c| c.principal).map(|c| c.chave.clone()))
+    };
+    let na_barra = resolvida(prefs.conta_na_barra(provedor));
+    let enviada = resolvida(prefs.conta_enviada(provedor));
     let lista = contas
         .into_iter()
         .map(|conta| {
@@ -4404,6 +4453,7 @@ fn status_das_contas(config_dir: &Path, provedor: Provedor) -> Value {
             status["apelido"] = json!(prefs.apelido(&conta.chave));
             status["mostraNoWidget"] = json!(prefs.mostra_no_widget(&conta.chave));
             status["naBarra"] = json!(na_barra.as_deref() == Some(conta.chave.as_str()));
+            status["enviada"] = json!(enviada.as_deref() == Some(conta.chave.as_str()));
             status
         })
         .collect();
@@ -4476,8 +4526,16 @@ fn set_conta_barra(
     Ok(())
 }
 
-/// Torna uma conta a principal do provedor: a que o tray, a barra, o widget, o
-/// envio ao Loki e a versao anterior do app usam.
+/// Escolhe a conta enviada ao Loki no provedor dela (aba Envio). Vale a partir do
+/// proximo ciclo de coleta.
+#[tauri::command]
+fn set_conta_enviada(paths: State<'_, RuntimePaths>, conta: String) -> Result<(), String> {
+    contas::definir_conta_enviada(&paths.config_dir, &conta)
+}
+
+/// Torna uma conta a principal do provedor: a que as telas mostram primeiro (Uso
+/// atual, widget, Dashboard Codex), a padrao da barra e do envio ao Loki (quando
+/// nao ha' escolha nas abas Barra/Envio) e a unica que a versao anterior do app ve'.
 #[tauri::command]
 fn set_conta_principal(
     app: AppHandle,
@@ -4693,20 +4751,35 @@ mod tests {
     }
 
     #[test]
-    fn so_a_principal_vai_ao_loki() {
-        let alvo = |principal: bool| Alvo {
+    fn so_a_conta_enviada_vai_ao_loki() {
+        let alvo = |chave: &str, principal: bool| Alvo {
             provedor: Provedor::Claude,
-            chave: "claude:x".to_string(),
+            chave: chave.to_string(),
             arquivo: PathBuf::new(),
             principal,
         };
+        let (principal, outra) = (alvo("claude:a", true), alvo("claude:b", false));
         let config = AppConfig::default();
-        assert!(envia_ao_loki(&config, &alvo(true), false));
-        assert!(!envia_ao_loki(&config, &alvo(false), false));
-        assert!(!envia_ao_loki(&config, &alvo(true), true));
+        // Sem escolha: so' a principal.
+        assert!(envia_ao_loki(&config, &principal, false, None));
+        assert!(!envia_ao_loki(&config, &outra, false, None));
+        // Com a outra escolhida na aba Envio: so' ela, e a principal deixa de ir.
+        assert!(envia_ao_loki(&config, &outra, false, Some("claude:b")));
+        assert!(!envia_ao_loki(&config, &principal, false, Some("claude:b")));
+        // Pausa geral ou o envio do provedor desligado seguram tudo.
+        assert!(!envia_ao_loki(&config, &principal, true, None));
         let mut sem_claude = AppConfig::default();
         sem_claude.envio.claude = false;
-        assert!(!envia_ao_loki(&sem_claude, &alvo(true), false));
+        assert!(!envia_ao_loki(&sem_claude, &principal, false, None));
+        // A escolhida que nao esta' mais entre as contas do ciclo nao vale.
+        let mut prefs = contas::Prefs::default();
+        prefs
+            .conta_enviada
+            .insert("claude".to_string(), "claude:x".to_string());
+        assert_eq!(
+            enviada_escolhida(&prefs, &[principal], Provedor::Claude),
+            None
+        );
     }
 
     #[test]
