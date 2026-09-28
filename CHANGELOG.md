@@ -29,6 +29,23 @@ mais nova — e a tela **Novidades** mostra o histórico completo. O campo `note
 
 ## [Não lançado]
 
+### Adicionado
+- Várias contas: conecte até duas contas do Claude e duas do Codex (ex.: trabalho e pessoal), cada uma com seu apelido.
+- Uso atual: com duas contas, o card do provedor mostra uma completa e a outra resumida ao lado; as setas do cabeçalho alternam entre elas.
+- Widget: com duas contas, mostra as duas — no modo mínimo agrupadas em Principal e Secundário; nos outros modos, um botão alterna entre elas.
+- Configurações: escolha quais contas aparecem no widget, qual a barra de tarefas mostra e qual é enviada ao Loki (por padrão, a principal).
+- Dashboard Codex: seletor de conta no cabeçalho.
+
+### Alterado
+- Uso atual: um card por provedor, com sessão e semanal no mesmo container.
+- Claude: a reabertura automática da sessão passa a acompanhar a conta em que o CLI está logado.
+- Claude: a conta do plano gratuito aparece como "Sem limites de uso para acompanhar", em vez de erro.
+
+### Corrigido
+- Claude: o login com Google na janela de login do app passou a funcionar.
+
+## [0.2.71] - 2026-09-26
+
 ### Removido
 - Claude: removida a autenticação por campos manuais (Organization ID + Cookie) — quem usava esse modo precisa conectar a conta pelo navegador nas Configurações.
 - Codex: removida a autenticação pelo arquivo auth.json — quem usava esse modo precisa conectar a conta pelo navegador nas Configurações.
